@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#08111d" />
+<title>Cloud Call Master — Smart Calling Suite</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#08111d; --panel:#101a33; --panel2:#16213d; --line:rgba(255,255,255,.10);
+  --text:#f3f7ff; --muted:#9fb0d1; --gold:#f5c542; --green:#25d366; --blue:#60a5fa;
+  --red:#ff6476; --orange:#ff9f43; --purple:#b58cff; --shadow:0 16px 40px rgba(0,0,0,.28);
+  --radius:22px; --radius2:16px; --base:16px; --dock-h:74px; --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  background:radial-gradient(circle at top left, rgba(245,197,66,.16), transparent 28%),
+             radial-gradient(circle at top right, rgba(96,165,250,.10), transparent 24%),
+             linear-gradient(180deg,#060b13 0%, var(--bg) 45%, #060910 100%);
+  color:var(--text); font-size:var(--base); -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+button,input,select,textarea{font:inherit}
+a{color:inherit}
+.hidden{display:none!important}
+.wrap{max-width:1300px;margin:0 auto;padding:14px 12px 32px}
+.glass{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));
+  border:1px solid var(--line);box-shadow:var(--shadow);backdrop-filter:blur(12px);border-radius:var(--radius)}
+.topbar{position:sticky;top:0;z-index:80;display:flex;gap:10px;justify-content:space-between;align-items:center;
+  padding:10px 14px;margin-bottom:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{width:46px;height:46px;border-radius:16px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--gold),#fff0a3);color:#1b1600;font-weight:900;font-size:19px;flex:0 0 auto;letter-spacing:-.5px}
+.title{font-size:18px;font-weight:900;white-space:nowrap}
+.sub{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+
+.usage-badge{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  background:rgba(9,14,25,.75);border:1px solid var(--line);font-size:11px;color:var(--muted);
+}
+.usage-badge b{color:var(--gold);font-size:12px}
+.usage-badge .x{cursor:pointer;color:var(--muted);font-weight:900;padding-left:2px}
+.usage-badge .x:hover{color:var(--red)}
+
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{border:0;cursor:pointer;text-decoration:none;border-radius:14px;padding:12px 14px;font-weight:800;
+  color:#07111e;background:#fff;display:inline-flex;gap:8px;align-items:center;justify-content:center;
+  transition:transform .12s ease,filter .12s ease;min-height:44px}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0);filter:brightness(.96)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn.small{padding:9px 12px;min-height:38px;font-size:13px;border-radius:12px}
+.btn.tiny{padding:6px 9px;min-height:30px;font-size:11px;border-radius:10px}
+.btn.primary{background:linear-gradient(135deg,var(--gold),#ffe58f)}
+.btn.green{background:linear-gradient(135deg,#2fe07b,#76f1ab)}
+.btn.blue{background:linear-gradient(135deg,#73b3ff,#a9d5ff)}
+.btn.purple{background:linear-gradient(135deg,#c6a6ff,#e4d3ff)}
+.btn.red{background:linear-gradient(135deg,#ff7b8b,#ff9cab)}
+.btn.dark{background:#16213d;color:var(--text);border:1px solid var(--line)}
+.btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+.btn.full{width:100%}
+.icon-btn{width:38px;height:38px;border-radius:12px;border:1px solid var(--line);background:#0b1324;color:var(--text);
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:16px;flex:0 0 auto}
+.icon-btn:hover{border-color:rgba(245,197,66,.4)}
+
+.grid{display:grid;gap:14px}
+.layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px;align-items:start}
+.panel{padding:14px}
+.section{padding:14px;margin-bottom:14px}
+.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#b8c7e8;margin-bottom:10px;
+  display:flex;justify-content:space-between;align-items:center;gap:8px}
+.label{font-size:12px;color:var(--muted);margin:8px 0 6px}
+input[type=text],input[type=password],select,textarea{width:100%;border-radius:12px;
+  border:1px solid rgba(255,255,255,.10);background:#0b1324;color:var(--text);padding:12px;outline:none}
+input[type=text]:focus,input[type=password]:focus,select:focus,textarea:focus{border-color:rgba(245,197,66,.45)}
+textarea{min-height:90px;resize:vertical}
+.notice{font-size:13px;line-height:1.5;padding:11px 13px;background:rgba(96,165,250,.10);
+  border:1px solid rgba(96,165,250,.18);border-radius:14px;color:#deebff}
+.notice.warn{background:rgba(255,159,67,.10);border-color:rgba(255,159,67,.22);color:#ffe6cc}
+.danger{background:rgba(255,100,118,.10);border-color:rgba(255,100,118,.18);color:#ffdfe3}
+.stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.stat{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:16px;padding:12px}
+.stat .n{font-size:22px;font-weight:900}
+.stat .l{font-size:11px;color:var(--muted);margin-top:4px}
+
+.progress-track{height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:10px}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--gold),#ffe58f);border-radius:999px;transition:width .3s ease}
+
+.call-card{background:linear-gradient(180deg,rgba(245,197,66,.10),rgba(255,255,255,.04));
+  border:1px solid rgba(245,197,66,.20);border-radius:22px;padding:16px;position:relative}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.name{font-size:24px;font-weight:900}
+.phone-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.phone{display:inline-flex;gap:8px;align-items:center;font-size:24px;font-weight:900;text-decoration:none;
+  color:#fff8d0;word-break:break-word}
+.copy-chip{border:1px solid var(--line);background:#0b1324;color:var(--muted);border-radius:10px;padding:6px 9px;
+  font-size:11px;cursor:pointer;font-weight:700}
+.copy-chip:hover{color:var(--gold);border-color:rgba(245,197,66,.4)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tab{padding:9px 11px;border-radius:999px;background:#0b1324;color:var(--text);border:1px solid rgba(255,255,255,.10);
+  cursor:pointer;font-size:12px;font-weight:800}
+.tab.active{background:linear-gradient(135deg,rgba(245,197,66,.96),rgba(255,229,143,.96));color:#1b1600}
+.data{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.kv{padding:10px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid var(--line);min-width:0}
+.kv .k{font-size:11px;color:var(--muted);margin-bottom:3px}
+.kv .v{font-size:14px;font-weight:700;word-break:break-word}
+.kv.full{grid-column:1/-1}
+.remarks-wrap{position:relative}
+.save-flag{position:absolute;top:-8px;right:8px;font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px;
+  background:rgba(255,159,67,.18);color:#ffdcae;border:1px solid rgba(255,159,67,.3)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.actions .btn{min-height:48px}
+.actions-row2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}
+.card-foot{display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:8px;flex-wrap:wrap}
+
+.list{max-height:calc(100vh - 300px);overflow:auto;padding-right:4px}
+.record{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;padding:10px;border-radius:14px;
+  border:1px solid var(--line);background:rgba(255,255,255,.04);margin-bottom:8px;cursor:pointer;position:relative}
+.record.active{outline:2px solid rgba(245,197,66,.34);background:rgba(245,197,66,.08)}
+.record .nm{font-size:14px;font-weight:900}
+.record .ph{font-size:11px;color:var(--muted);margin-top:3px}
+.record .rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.record .hide-x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px}
+.record .hide-x:hover{color:var(--red)}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:64px;padding:5px 9px;
+  border-radius:999px;background:#0b1324;border:1px solid var(--line);color:var(--muted);font-size:11px;font-weight:800}
+.table-wrap{overflow:auto;border-radius:16px;border:1px solid var(--line)}
+table{width:100%;min-width:820px;border-collapse:collapse;background:rgba(255,255,255,.03)}
+th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:9px 10px;font-size:12px;text-align:left}
+th{position:sticky;top:0;background:#0d1630}
+tr.row-hidden{opacity:.4}
+.toast{position:fixed;right:14px;bottom:20px;z-index:9999;background:rgba(9,14,25,.96);color:var(--text);
+  border:1px solid var(--line);box-shadow:var(--shadow);border-radius:14px;padding:12px 14px;min-width:220px;
+  max-width:340px;display:none}
+.toast.show{display:block;animation:pop .18s ease}
+@keyframes pop{from{transform:translateY(8px);opacity:.2}to{transform:translateY(0);opacity:1}}
+.login-shell{min-height:100vh;display:grid;place-items:center;padding:18px 12px}
+.login-box{width:100%;max-width:420px;padding:20px}
+.login-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.mini{font-size:12px;color:var(--muted);line-height:1.5}
+.role-toggle{display:flex;gap:8px;margin-bottom:14px}
+.role-toggle button{flex:1;padding:10px;border-radius:12px;border:1px solid var(--line);background:#0b1324;
+  color:var(--text);cursor:pointer;font-weight:800;font-size:13px}
+.role-toggle button.on{background:linear-gradient(135deg,var(--gold),#ffe58f);color:#1b1600}
+.tag{display:inline-block;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:800;
+  background:rgba(255,255,255,.08);color:var(--muted)}
+.tag.admin{background:rgba(245,197,66,.18);color:#ffe9a8}
+
+/* ---- Queue drawer (mobile-first hide/show) ---- */
+.queue-toggle{display:none}
+.drawer-overlay{display:none}
+@media (max-width:980px){
+  .layout{grid-template-columns:1fr}
+  .list{max-height:none}
+  .queue-toggle{display:inline-flex}
+  aside.queue-drawer{
+    position:fixed; top:0; right:0; height:100dvh; width:min(340px,86vw); z-index:220;
+    transform:translateX(100%); transition:transform .26s ease; border-radius:0; overflow-y:auto;
+    padding-bottom:calc(20px + var(--safe-b));
+  }
+  aside.queue-drawer.open{transform:translateX(0)}
+  .drawer-overlay{display:block;position:fixed;inset:0;background:rgba(3,6,12,.55);z-index:210;opacity:0;
+    pointer-events:none;transition:opacity .2s ease}
+  .drawer-overlay.open{opacity:1;pointer-events:auto}
+  .drawer-close{display:inline-flex}
+}
+.drawer-close{display:none}
+
+/* ---- Mobile bottom action dock ---- */
+.mobile-dock{display:none}
+@media (max-width:720px){
+  .mobile-dock{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:6px; position:fixed; left:0; right:0; bottom:0; z-index:150;
+    padding:8px 8px calc(8px + var(--safe-b)); background:rgba(9,14,25,.94); border-top:1px solid var(--line);
+    backdrop-filter:blur(14px);
+  }
+  .mobile-dock button, .mobile-dock a{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; border:0;
+    border-radius:12px; padding:8px 2px; font-size:10px; font-weight:800; text-decoration:none; color:var(--text);
+    background:rgba(255,255,255,.06); min-height:56px;
+  }
+  .mobile-dock .ic{font-size:17px}
+  .mobile-dock .dock-call{background:linear-gradient(135deg,#2fe07b,#76f1ab);color:#07220f}
+  .mobile-dock .dock-save{background:linear-gradient(135deg,var(--gold),#ffe58f);color:#1b1600}
+  .wrap{padding-bottom:calc(var(--dock-h) + 24px)}
+  .actions,.actions-row2{display:none}
+}
+
+@media (max-width:640px){
+  .name{font-size:20px} .phone{font-size:20px}
+  .data{grid-template-columns:1fr}
+  .stat-grid{grid-template-columns:1fr 1fr}
+  table{min-width:680px}
+  .title{font-size:16px}
+}
+</style>
+</head>
+<body>
+<div id="toast" class="toast"></div>
+<div id="app"></div>
+
+<script>
+(() => {
+/* =====================================================================
+   1) PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL BELOW (see setup guide)
+   Backend/server logic is untouched — only client action names are used.
+   ===================================================================== */
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbzE8VZea3c0aEKiFkOXAkvBCZf8fW-tTd4JTT1qyLap2Tyopj4fIUSkMFYpPzaAmbB_pw/exec";
+
+const LS_SESSION = "ccm_session_v1";
+const LS_HIDDEN_PREFIX = "ccm_hidden_"; // + username -> array of contact IDs hidden from that user's queue (admin fallback only)
+const LS_DRAFT_PREFIX = "ccm_draft_";   // + username -> {id: remarksText} unsent remarks drafts
+const LS_QUEUE_RETRY = "ccm_retry_queue_v1"; // failed updates waiting to sync
+const LS_PROFILE_PREFIX = "ccm_profilelink_"; // + username -> saved profile/e-card link
+const STATUS_OPTIONS = ["Pending","Interested","Not Interested","Callback","Busy","Wrong Number","No Answer","Dropped","Follow Up","Do Not Call","Closed"];
+
+const app = document.getElementById("app");
+const toast = document.getElementById("toast");
+
+let session = JSON.parse(localStorage.getItem(LS_SESSION) || "null");
+let contacts = [];
+let usageCount = null;
+let usageBadgeDismissed = sessionStorage.getItem("ccm_usage_dismissed") === "1";
+let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showProfilePanel:false, dirty:false };
+
+/* ---------------------- small helpers ---------------------- */
+function showToast(msg, ms=2600){
+  toast.textContent = msg;
+  toast.classList.add("show");
+  clearTimeout(showToast.t);
+  showToast.t = setTimeout(()=>toast.classList.remove("show"), ms);
+}
+function esc(s){ return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+function saveSession(){ localStorage.setItem(LS_SESSION, JSON.stringify(session)); }
+
+/* Clean a phone number for tel:/wa.me/sms: links.
+   Fixes the old bug where numbers already carrying a 91/+91 prefix got a
+   second 91 stuck on the front for WhatsApp, breaking the link. */
+function cleanNumber(raw){
+  let d = String(raw||"").replace(/\D/g,"");
+  if(d.length>10 && d.startsWith("0")) d = d.replace(/^0+/,"");
+  if(d.length===10) d = "91"+d;
+  else if(d.length===11 && d.startsWith("0")) d = "91"+d.slice(1);
+  return d; // e.g. 91XXXXXXXXXX
+}
+function copyToClipboard(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>showToast("Number copied")).catch(()=>showToast("Could not copy"));
+  }else{
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t);
+    t.select(); try{ document.execCommand("copy"); showToast("Number copied"); }catch(e){ showToast("Could not copy"); }
+    t.remove();
+  }
+}
+
+/* ---------------------- hidden (soft-delete) contacts, per user ---------------------- */
+function hiddenKey(){ return LS_HIDDEN_PREFIX + (session ? session.username : "guest"); }
+function getHiddenIds(){ return JSON.parse(localStorage.getItem(hiddenKey()) || "[]"); }
+function setHiddenIds(arr){ localStorage.setItem(hiddenKey(), JSON.stringify([...new Set(arr)])); }
+function hideContact(id){ const h = getHiddenIds(); h.push(id); setHiddenIds(h); }
+function unhideContact(id){ setHiddenIds(getHiddenIds().filter(x => String(x)!==String(id))); }
+
+/* Real delete: tries the sheet first (needs a "deletecontact" action in your
+   Apps Script). If that action doesn't exist yet, it hides the contact on
+   this device instead, so the delete button never silently does nothing. */
+async function tryDeleteContact(id){
+  const r = await api("deletecontact", { username:session.username, pin:session.pin, id });
+  if(r.ok){
+    contacts = contacts.filter(c => String(c.ID)!==String(id));
+    unhideContact(id);
+    return { deletedFromSheet:true };
+  }
+  hideContact(id);
+  return { deletedFromSheet:false };
+}
+function isHidden(id){ return getHiddenIds().map(String).includes(String(id)); }
+
+/* ---------------------- offline-safe retry queue ---------------------- */
+function getRetryQueue(){ return JSON.parse(localStorage.getItem(LS_QUEUE_RETRY) || "[]"); }
+function setRetryQueue(q){ localStorage.setItem(LS_QUEUE_RETRY, JSON.stringify(q)); }
+function queueForRetry(payload){
+  const q = getRetryQueue(); q.push({ ...payload, ts:Date.now() }); setRetryQueue(q);
+}
+async function flushRetryQueue(){
+  const q = getRetryQueue();
+  if(!q.length) return;
+  const remaining = [];
+  for(const item of q){
+    try{
+      const r = await apiRaw("updatecontact", item);
+      if(!r.ok) remaining.push(item);
+    }catch(e){ remaining.push(item); }
+  }
+  setRetryQueue(remaining);
+  if(remaining.length < q.length) showToast(`Synced ${q.length - remaining.length} pending update(s)`);
+}
+window.addEventListener("online", flushRetryQueue);
+
+/* ---------------------- API ---------------------- */
+async function apiRaw(action, payload={}){
+  const res = await fetch(BACKEND_URL, { method:"POST", body: JSON.stringify(Object.assign({ action }, payload)) });
+  return await res.json();
+}
+async function api(action, payload={}){
+  if(BACKEND_URL.indexOf("PASTE_YOUR") === 0){
+    showToast("Backend not connected yet — paste your Google Apps Script URL in index.html");
+    return { ok:false, error:"Backend URL missing" };
+  }
+  try{
+    return await apiRaw(action, payload);
+  }catch(err){
+    console.error(err);
+    return { ok:false, error:"network", offline:true };
+  }
+}
+
+async function refreshUsage(){
+  const r = await api("getusagecount", {});
+  if(r.ok) usageCount = r.usageCount;
+}
+
+function usageBadgeHtml(){
+  if(usageBadgeDismissed || usageCount===null) return "";
+  return `<span class="usage-badge" id="usageBadge">👁 Usage <b>${usageCount}</b><span class="x" id="usageDismiss" title="Hide this">✕</span></span>`;
+}
+function bindUsageBadge(){
+  const x = document.getElementById("usageDismiss");
+  if(x) x.onclick = () => { usageBadgeDismissed = true; sessionStorage.setItem("ccm_usage_dismissed","1"); render(); };
+}
+
+/* ---------------------- LOGIN ---------------------- */
+function renderLogin(){
+  let role = "user";
+  app.innerHTML = `
+    <div class="login-shell">
+      <div class="glass login-box">
+        <div class="login-head">
+          <div class="logo">CCM</div>
+          <div><div class="title">Cloud Call Master</div><div class="sub">Smart calling suite, powered by your Google Sheet</div></div>
+        </div>
+        <div class="role-toggle">
+          <button id="roleUserBtn" class="on">I'm a Field User</button>
+          <button id="roleAdminBtn">I'm the Admin</button>
+        </div>
+        <div class="label">Username</div>
+        <input id="loginUser" type="text" placeholder="e.g. rajendra1" autocomplete="off"/>
+        <div class="label">PIN</div>
+        <input id="loginPin" type="password" placeholder="4-6 digit PIN" inputmode="numeric"/>
+        <button id="loginBtn" class="btn primary full" style="margin-top:14px">Log in</button>
+        <div class="notice" style="margin-top:14px">
+          Admin username is always <b>admin</b>. Field users log in with the username and PIN the admin
+          gave them. Ask your admin if you don't have one.
+        </div>
+      </div>
+    </div>
+  `;
+  const roleUserBtn = document.getElementById("roleUserBtn");
+  const roleAdminBtn = document.getElementById("roleAdminBtn");
+  const userField = document.getElementById("loginUser");
+  roleUserBtn.onclick = () => { role="user"; roleUserBtn.classList.add("on"); roleAdminBtn.classList.remove("on"); userField.disabled=false; userField.value=""; userField.placeholder="e.g. rajendra1"; };
+  roleAdminBtn.onclick = () => { role="admin"; roleAdminBtn.classList.add("on"); roleUserBtn.classList.remove("on"); userField.value="admin"; userField.disabled=true; };
+
+  const doLogin = async () => {
+    const username = document.getElementById("loginUser").value.trim();
+    const pin = document.getElementById("loginPin").value.trim();
+    if(!username || !pin) return showToast("Enter username and PIN");
+    const btn = document.getElementById("loginBtn"); btn.disabled = true; btn.textContent = "Logging in…";
+    const r = await api("login", { username, pin });
+    btn.disabled = false; btn.textContent = "Log in";
+    if(!r.ok) return showToast(r.error || "Login failed");
+    session = { username:r.username, role:r.role, fullName:r.fullName || r.username, pin };
+    saveSession();
+    showToast(`Welcome, ${session.fullName}`);
+    boot();
+  };
+  document.getElementById("loginBtn").onclick = doLogin;
+  document.getElementById("loginPin").addEventListener("keydown", e => { if(e.key==="Enter") doLogin(); });
+}
+
+/* ---------------------- BOOT / ROUTER ---------------------- */
+async function boot(){
+  await refreshUsage();
+  flushRetryQueue();
+  if(!session){ renderLogin(); return; }
+  app.innerHTML = `<div class="wrap"><div class="notice">Loading your data from Google Sheet…</div></div>`;
+  const r = await api("getcontacts", { username:session.username, pin: session.pin });
+  if(!r.ok){
+    showToast(r.error || "Session expired, please log in again");
+    session = null; saveSession();
+    renderLogin();
+    return;
+  }
+  contacts = r.contacts || [];
+  render();
+}
+function render(){
+  if(!session){ renderLogin(); return; }
+  if(session.role === "admin") renderAdmin(); else renderUser();
+}
+
+/* ---------------------- USER VIEW ---------------------- */
+// Privacy: a field user must only ever see contacts assigned to them, never
+// the whole database. This filters client-side by the AssignedTo column so
+// it holds even if the backend response isn't already scoped per user.
+function assignedContacts(){
+  if(session.role === "admin") return contacts;
+  const me = String(session.username||"").trim().toLowerCase();
+  return contacts.filter(c => String(c.AssignedTo||"").trim().toLowerCase() === me);
+}
+function visibleContacts(){
+  const hidden = getHiddenIds().map(String);
+  return assignedContacts().filter(c => !hidden.includes(String(c.ID)));
+}
+function filteredContacts(){
+  let list = visibleContacts().map((c) => ({...c, __i: contacts.indexOf(c)}));
+  if(ui.statusFilter !== "All") list = list.filter(c => (c.Status || "Pending") === ui.statusFilter);
+  if(ui.search){
+    const q = ui.search.toLowerCase();
+    list = list.filter(c => Object.values(c).join(" ").toLowerCase().includes(q));
+  }
+  return list;
+}
+function draftKey(){ return LS_DRAFT_PREFIX + session.username; }
+function getDrafts(){ return JSON.parse(localStorage.getItem(draftKey()) || "{}"); }
+function setDraft(id, text){ const d = getDrafts(); d[id] = text; localStorage.setItem(draftKey(), JSON.stringify(d)); }
+function clearDraft(id){ const d = getDrafts(); delete d[id]; localStorage.setItem(draftKey(), JSON.stringify(d)); }
+
+/* ---------------------- Profile link (share-with-prospects) ---------------------- */
+// Each field user can save a link to their own profile / e-card / catalog and
+// share it straight to a prospect's WhatsApp with one tap. Stored per user on
+// this device; also tries to sync to the sheet if a "saveprofilelink" action
+// exists on the backend, but never depends on it.
+function profileLinkKey(){ return LS_PROFILE_PREFIX + session.username; }
+function getProfileLink(){ return localStorage.getItem(profileLinkKey()) || ""; }
+function setProfileLinkLocal(link){ localStorage.setItem(profileLinkKey(), link); }
+
+function renderUser(){
+  const list = filteredContacts();
+  if(ui.currentIndex >= list.length) ui.currentIndex = 0;
+  const rec = list[ui.currentIndex] || null;
+  const total = visibleContacts().length;
+  const done = visibleContacts().filter(c => c.Status && c.Status !== "Pending").length;
+  const pct = total ? Math.round((done/total)*100) : 0;
+  const drafts = getDrafts();
+  const draftText = rec && drafts[rec.ID] !== undefined ? drafts[rec.ID] : (rec ? (rec.Remarks||"") : "");
+  const hasDraft = rec && drafts[rec.ID] !== undefined && drafts[rec.ID] !== (rec.Remarks||"");
+  const profileLink = getProfileLink();
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="glass topbar">
+        <div class="brand">
+          <div class="logo">CCM</div>
+          <div>
+            <div class="title">Cloud Call Master</div>
+            <div class="sub">${esc(session.fullName)} <span class="tag">field user</span> ${usageBadgeHtml()}</div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <span class="badge">${done}/${total} worked</span>
+          <button id="openProfileBtn" class="btn dark small">🔗 Profile Link</button>
+          <button id="openDrawerBtn" class="btn dark small queue-toggle">☰ Queue (${total})</button>
+          <button id="logoutBtn" class="btn ghost small">Logout</button>
+        </div>
+      </div>
+
+      ${ui.showProfilePanel ? `
+      <div class="glass section">
+        <div class="section-title"><span>Your Profile Link</span>
+          <button id="closeProfileBtn" class="icon-btn" title="Close">✕</button>
+        </div>
+        <div class="mini" style="margin-bottom:8px">Paste a link to your profile, e-business card, or product catalog here — anything you want prospects to see. Once saved, a "Share My Profile" button appears on every contact so you can send it over WhatsApp in one tap.</div>
+        <input id="profileLinkInput" type="text" placeholder="https://…" value="${esc(profileLink)}"/>
+        <div class="toolbar" style="margin-top:10px">
+          <button id="saveProfileLinkBtn" class="btn primary small">Save link</button>
+          ${profileLink ? `<a class="btn dark small" href="${esc(profileLink)}" target="_blank" rel="noopener">Preview</a>
+          <button id="copyProfileLinkBtn" class="btn ghost small">Copy</button>` : ""}
+        </div>
+      </div>` : ""}
+
+      <div class="glass section" style="padding:12px 16px">
+        <div class="section-title"><span>Today's progress</span><span>${pct}%</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      </div>
+
+      <div class="layout">
+        <div id="drawerOverlay" class="drawer-overlay ${ui.drawerOpen?'open':''}"></div>
+        <aside class="glass panel queue-drawer ${ui.drawerOpen?'open':''}" id="queueDrawer">
+          <div class="section-title">
+            <span>Filters</span>
+            <button id="drawerCloseBtn" class="icon-btn drawer-close" title="Hide queue">✕</button>
+          </div>
+          <div class="label">Search</div>
+          <input id="searchBox" type="text" placeholder="Name, mobile, address…" value="${esc(ui.search)}"/>
+          <div class="label">Status</div>
+          <select id="statusFilter">
+            <option value="All">All</option>
+            ${STATUS_OPTIONS.map(s=>`<option ${ui.statusFilter===s?"selected":""}>${s}</option>`).join("")}
+          </select>
+          <div class="section-title" style="margin-top:16px"><span>Your Queue</span></div>
+          <div class="list">
+            ${list.map((c,idx)=>`
+              <div class="record ${idx===ui.currentIndex?"active":""}" data-i="${idx}">
+                <div><div class="nm">${esc(c.Name||"Unnamed")}</div><div class="ph">${esc(c.Mobile||"")}</div></div>
+                <div class="rmeta"><span class="badge">${esc(c.Status||"Pending")}</span></div>
+              </div>`).join("") || `<div class="mini">No contacts assigned to you yet. Ask your admin to assign some.</div>`}
+          </div>
+        </aside>
+
+        <main>
+          ${rec ? `
+          <div class="call-card">
+            <div class="card-top">
+              <div>
+                <div class="name">${esc(rec.Name||"Unnamed")}</div>
+                <div class="phone-row">
+                  <a class="phone" href="tel:${cleanNumber(rec.Mobile)}">📞 ${esc(rec.Mobile||"—")}</a>
+                  <button class="copy-chip" id="copyBtn">Copy</button>
+                </div>
+              </div>
+            </div>
+            ${profileLink ? `<div class="toolbar" style="margin-top:10px"><button class="btn dark small" id="shareProfileBtn">📇 Share My Profile via WhatsApp</button></div>` : ""}
+            <div class="tabs">
+              ${STATUS_OPTIONS.map(s=>`<button class="tab ${rec.Status===s?"active":""}" data-status="${s}">${s}</button>`).join("")}
+            </div>
+            <div class="data">
+              <div class="kv"><div class="k">Alt Mobile</div><div class="v">${esc(rec.Alt||"—")}</div></div>
+              <div class="kv"><div class="k">Address</div><div class="v">${esc(rec.Address||"—")}</div></div>
+              <div class="kv full remarks-wrap">
+                ${hasDraft ? `<span class="save-flag">Unsaved</span>` : ""}
+                <div class="k">Remarks</div>
+                <textarea id="remarksBox" placeholder="Add a note about this call…">${esc(draftText)}</textarea>
+              </div>
+            </div>
+            <div class="actions">
+              <a class="btn green" href="tel:${cleanNumber(rec.Mobile)}">📞 Call</a>
+              <button class="btn blue" id="waBtn">💬 WhatsApp</button>
+              <button class="btn purple" id="smsBtn">✉️ Message</button>
+              <button class="btn primary" id="saveBtn">💾 Save</button>
+            </div>
+            <div class="actions-row2">
+              <button class="btn dark" id="prevBtn">◀ Prev</button>
+              <button class="btn dark" id="nextBtn">Next ▶</button>
+              <button class="btn ghost" id="skipBtn">Skip</button>
+            </div>
+            <div class="card-foot mini">Record ${ui.currentIndex+1} of ${list.length}</div>
+          </div>
+          ` : `<div class="notice">No contacts to show. Ask your admin to assign some, or adjust your filters.</div>`}
+        </main>
+      </div>
+    </div>
+
+    ${rec ? `
+    <div class="mobile-dock">
+      <a class="dock-call" href="tel:${cleanNumber(rec.Mobile)}"><span class="ic">📞</span>Call</a>
+      <button id="dockWa"><span class="ic">💬</span>WhatsApp</button>
+      <button id="dockSms"><span class="ic">✉️</span>Message</button>
+      <button id="dockNext"><span class="ic">▶</span>Next</button>
+      <button id="dockSave" class="dock-save"><span class="ic">💾</span>Save</button>
+    </div>` : ""}
+  `;
+
+  bindUsageBadge();
+  document.getElementById("logoutBtn").onclick = () => { session=null; saveSession(); renderLogin(); };
+
+  const openProfileBtn = document.getElementById("openProfileBtn");
+  if(openProfileBtn) openProfileBtn.onclick = () => { ui.showProfilePanel = !ui.showProfilePanel; renderUser(); };
+  const closeProfileBtn = document.getElementById("closeProfileBtn");
+  if(closeProfileBtn) closeProfileBtn.onclick = () => { ui.showProfilePanel = false; renderUser(); };
+  const saveProfileLinkBtn = document.getElementById("saveProfileLinkBtn");
+  if(saveProfileLinkBtn) saveProfileLinkBtn.onclick = async () => {
+    const val = document.getElementById("profileLinkInput").value.trim();
+    if(val && !/^https?:\/\//i.test(val)){ showToast("Link should start with http:// or https://"); return; }
+    setProfileLinkLocal(val);
+    api("saveprofilelink", { username:session.username, pin:session.pin, link:val }).catch(()=>{});
+    showToast(val ? "Profile link saved" : "Profile link cleared");
+    renderUser();
+  };
+  const copyProfileLinkBtn = document.getElementById("copyProfileLinkBtn");
+  if(copyProfileLinkBtn) copyProfileLinkBtn.onclick = () => copyToClipboard(profileLink);
+
+  const openDrawerBtn = document.getElementById("openDrawerBtn");
+  const overlay = document.getElementById("drawerOverlay");
+  const closeDrawer = () => { ui.drawerOpen=false; renderUser(); };
+  if(openDrawerBtn) openDrawerBtn.onclick = () => { ui.drawerOpen=true; renderUser(); };
+  const drawerCloseBtn = document.getElementById("drawerCloseBtn");
+  if(drawerCloseBtn) drawerCloseBtn.onclick = closeDrawer;
+  if(overlay) overlay.onclick = closeDrawer;
+
+  const sb = document.getElementById("searchBox");
+  if(sb){
+    sb.oninput = e => { ui.search=e.target.value; ui.currentIndex=0; renderUser(); focusEnd("searchBox"); };
+  }
+  const sf = document.getElementById("statusFilter"); if(sf) sf.onchange = e => { ui.statusFilter=e.target.value; ui.currentIndex=0; renderUser(); };
+  document.querySelectorAll(".record[data-i]").forEach(el => el.onclick = () => { ui.currentIndex = Number(el.dataset.i); ui.drawerOpen=false; renderUser(); });
+
+  if(rec){
+    const currentRemarks = () => { const r = document.getElementById("remarksBox"); return r ? r.value : draftText; };
+
+    const remarksBox = document.getElementById("remarksBox");
+    if(remarksBox){
+      remarksBox.oninput = () => { setDraft(rec.ID, remarksBox.value); };
+    }
+
+    document.querySelectorAll(".tab").forEach(t => t.onclick = () => saveRecord(rec, t.dataset.status, currentRemarks()));
+
+    const num = cleanNumber(rec.Mobile);
+    const openWa = () => { if(!num) return showToast("No mobile number"); window.open(`https://wa.me/${num}?text=${encodeURIComponent("Hello! Thank you for your interest.")}`,"_blank","noopener"); };
+    const openSms = () => { if(!num) return showToast("No mobile number"); window.location.href = `sms:${rec.Mobile}?body=${encodeURIComponent("Hello! Thank you for your interest.")}`; };
+    const doSave = () => saveRecord(rec, rec.Status || "Pending", currentRemarks());
+    const goNext = () => { ui.currentIndex = (ui.currentIndex+1) % Math.max(list.length,1); renderUser(); };
+    const goPrev = () => { ui.currentIndex = (ui.currentIndex-1+list.length) % Math.max(list.length,1); renderUser(); };
+
+    const waBtn = document.getElementById("waBtn"); if(waBtn) waBtn.onclick = openWa;
+    const smsBtn = document.getElementById("smsBtn"); if(smsBtn) smsBtn.onclick = openSms;
+    const saveBtn = document.getElementById("saveBtn"); if(saveBtn) saveBtn.onclick = doSave;
+    const nextBtn = document.getElementById("nextBtn"); if(nextBtn) nextBtn.onclick = goNext;
+    const prevBtn = document.getElementById("prevBtn"); if(prevBtn) prevBtn.onclick = goPrev;
+    const skipBtn = document.getElementById("skipBtn"); if(skipBtn) skipBtn.onclick = goNext;
+    const copyBtn = document.getElementById("copyBtn"); if(copyBtn) copyBtn.onclick = () => copyToClipboard(rec.Mobile||"");
+    const shareProfileBtn = document.getElementById("shareProfileBtn");
+    if(shareProfileBtn) shareProfileBtn.onclick = () => {
+      if(!num) return showToast("No mobile number");
+      const msg = `Hi ${rec.Name||""}, here's my profile/details: ${profileLink}`;
+      window.open(`https://wa.me/${num}?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
+    };
+
+    const dockWa = document.getElementById("dockWa"); if(dockWa) dockWa.onclick = openWa;
+    const dockSms = document.getElementById("dockSms"); if(dockSms) dockSms.onclick = openSms;
+    const dockNext = document.getElementById("dockNext"); if(dockNext) dockNext.onclick = goNext;
+    const dockSave = document.getElementById("dockSave"); if(dockSave) dockSave.onclick = doSave;
+  }
+}
+function focusEnd(id){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.focus();
+  const v = el.value; el.value=""; el.value=v;
+}
+
+async function saveRecord(rec, status, remarks){
+  const payload = { username:session.username, pin: session.pin, id:rec.ID, status, remarks: remarks===undefined?rec.Remarks:remarks };
+  const r = await api("updatecontact", payload);
+  if(!r.ok){
+    if(r.offline){
+      queueForRetry(payload);
+      showToast("No connection — saved on this device, will sync automatically");
+    }else{
+      return showToast(r.error || "Save failed — check connection");
+    }
+  }else{
+    showToast("Saved to Google Sheet");
+  }
+  rec.Status = status; if(remarks!==undefined) rec.Remarks = remarks;
+  clearDraft(rec.ID);
+  renderUser();
+}
+
+/* ---------------------- ADMIN VIEW ---------------------- */
+function renderAdmin(){
+  const total = contacts.length;
+  const byStatus = {};
+  contacts.forEach(c => { const s=c.Status||"Pending"; byStatus[s]=(byStatus[s]||0)+1; });
+  const adminHidden = getHiddenIds().map(String);
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="glass topbar">
+        <div class="brand">
+          <div class="logo">CCM</div>
+          <div>
+            <div class="title">Cloud Call Master</div>
+            <div class="sub">Admin console <span class="tag admin">admin</span> ${usageBadgeHtml()}</div>
+          </div>
+        </div>
+        <div class="toolbar"><button id="logoutBtn" class="btn ghost small">Logout</button></div>
+      </div>
+
+      <div class="stat-grid" style="margin-bottom:14px">
+        <div class="glass stat"><div class="n">${total}</div><div class="l">Total contacts</div></div>
+        <div class="glass stat"><div class="n">${byStatus["Pending"]||0}</div><div class="l">Pending</div></div>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title"><span>Backend connection</span>
+          <button id="testConnBtn" class="btn dark small">Test connection</button>
+        </div>
+        <div class="mini">I can't open your Google Sheet directly from here — it sits behind a private, PIN-protected script URL. Use this to see exactly what your backend sends back, so you can confirm it's talking to the right sheet.</div>
+        <div id="connResult" class="mini" style="margin-top:8px"></div>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title"><span>1. Upload / Replace Database</span></div>
+        <div class="mini">Upload a CSV or XLSX with columns for name, mobile, alt mobile and address — header names can vary (e.g. "Phone", "Mobile No", "Contact Number" all work), up to 10,000 rows.</div>
+        <input id="fileInput" type="file" accept=".csv,.xlsx,.xls" style="margin-top:10px"/>
+        <div id="filePreview" class="mini" style="margin-top:10px"></div>
+        <div class="toolbar" style="margin-top:10px">
+          <button id="uploadReplaceBtn" class="btn primary small" disabled>Replace entire database</button>
+          <button id="uploadAppendBtn" class="btn dark small" disabled>Append to database</button>
+          <button id="deleteDbBtn" class="btn red small">Delete entire database</button>
+        </div>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title"><span>2. Register / Manage Field Users</span></div>
+        <div class="row" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px">
+          <input id="newUsername" type="text" placeholder="Username (e.g. rajendra1)"/>
+          <input id="newPin" type="text" placeholder="PIN (e.g. 4321)"/>
+          <input id="newFullName" type="text" placeholder="Full name"/>
+          <button id="addUserBtn" class="btn green small">Add / Update</button>
+        </div>
+        <div id="userListBox" style="margin-top:12px"></div>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title"><span>3. Assign Contacts to a User</span></div>
+        <div class="mini">Enter a username and the contact ID range you want to hand to them (from the report table below).</div>
+        <div class="row" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:8px">
+          <input id="assignFrom" type="text" placeholder="From ID (e.g. 1)"/>
+          <input id="assignTo" type="text" placeholder="To ID (e.g. 500)"/>
+          <button id="assignRunBtn" class="btn blue small">Assign</button>
+        </div>
+        <input id="assignUsername" type="text" placeholder="Assign to username" style="margin-top:8px"/>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title"><span>4. Activity Report</span>
+          <button id="refreshReportBtn" class="btn dark small">Refresh</button>
+        </div>
+        <div id="reportBox" class="mini">Click Refresh to load the latest report from the sheet.</div>
+        <div class="toolbar" style="margin-top:10px">
+          <button id="downloadCsvBtn" class="btn dark small">⬇ Download contacts as CSV</button>
+        </div>
+      </div>
+
+      <div class="glass section">
+        <div class="section-title">
+          <span>5. All Contacts</span>
+          <span class="mini">Rows you delete here try to remove from the sheet; if your sheet doesn't support that yet, they're hidden on this device instead.</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Name</th><th>Mobile</th><th>Status</th><th>Assigned To</th><th>Updated By</th><th></th></tr></thead>
+            <tbody>
+              ${contacts.slice(0,500).map(c=>`<tr class="${adminHidden.includes(String(c.ID))?'row-hidden':''}">
+                <td>${esc(c.ID)}</td><td>${esc(c.Name)}</td><td>${esc(c.Mobile)}</td><td>${esc(c.Status||"Pending")}</td>
+                <td>${esc(c.AssignedTo||"—")}</td><td>${esc(c.UpdatedBy||"—")}</td>
+                <td>${adminHidden.includes(String(c.ID))
+                  ? `<button class="btn dark tiny" data-restore-row="${esc(c.ID)}">Restore</button>`
+                  : `<button class="btn red tiny" data-del-row="${esc(c.ID)}">Delete</button>`}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${contacts.length>500 ? `<div class="mini" style="margin-top:8px">Showing first 500 of ${contacts.length} rows. Use Download CSV for the full list.</div>` : ""}
+      </div>
+    </div>
+  `;
+
+  bindUsageBadge();
+  document.getElementById("logoutBtn").onclick = () => { session=null; saveSession(); renderLogin(); };
+
+  bindFileUpload();
+  document.getElementById("testConnBtn").onclick = async () => {
+    const box = document.getElementById("connResult");
+    box.textContent = "Testing…";
+    const [usage, rep] = await Promise.all([
+      api("getusagecount", {}),
+      api("getreport", { username:session.username, pin:session.pin })
+    ]);
+    const lines = [];
+    lines.push(`Backend URL: <code style="word-break:break-all">${esc(BACKEND_URL)}</code>`);
+    lines.push(usage.ok ? `✅ Reachable — usage count: ${esc(usage.usageCount)}` : `❌ getusagecount failed: ${esc(usage.error||'no response')}`);
+    lines.push(rep.ok ? `✅ Report loaded — ${esc(rep.totalContacts)} total contact(s) currently in the connected sheet` : `❌ getreport failed: ${esc(rep.error||'no response')}`);
+    lines.push(`If this sheet isn't the "pari" sheet you expect, open the Apps Script project bound to that URL (Extensions → Apps Script from within the actual Google Sheet) and confirm it's the same script — the script only ever talks to whichever sheet it's bound/pointed to, so the fix is on the sheet/script side, not this page.`);
+    box.innerHTML = lines.join("<br/>");
+  };
+  document.getElementById("deleteDbBtn").onclick = async () => {
+    if(!confirm("This deletes ALL contacts from the Google Sheet. Continue?")) return;
+    const r = await api("deletedatabase", { username:session.username, pin:session.pin });
+    if(!r.ok) return showToast(r.error||"Failed");
+    showToast("Database deleted"); boot();
+  };
+
+  document.querySelectorAll("[data-del-row]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.delRow;
+    if(!confirm("Delete this contact? This tries to remove it from the sheet.")) return;
+    const res = await tryDeleteContact(id);
+    showToast(res.deletedFromSheet ? "Contact deleted from the sheet" : "Sheet delete isn't set up yet — hidden on this device instead");
+    renderAdmin();
+  });
+  document.querySelectorAll("[data-restore-row]").forEach(b => b.onclick = () => { unhideContact(b.dataset.restoreRow); renderAdmin(); });
+
+  document.getElementById("addUserBtn").onclick = async () => {
+    const newUsername = document.getElementById("newUsername").value.trim();
+    const newPin = document.getElementById("newPin").value.trim();
+    const newFullName = document.getElementById("newFullName").value.trim();
+    if(!newUsername || !newPin) return showToast("Username and PIN required");
+    const r = await api("registeruser", { username:session.username, pin:session.pin, newUsername, newPin, fullName:newFullName, role:"user" });
+    if(!r.ok) return showToast(r.error||"Failed");
+    showToast("User saved"); loadUserList();
+  };
+
+  document.getElementById("assignRunBtn").onclick = async () => {
+    const from = Number(document.getElementById("assignFrom").value);
+    const to = Number(document.getElementById("assignTo").value);
+    const assignTo = document.getElementById("assignUsername").value.trim();
+    if(!from || !to || !assignTo) return showToast("Fill all three fields");
+    const ids = [];
+    for(let i=from;i<=to;i++) ids.push(i);
+    const r = await api("assigncontacts", { username:session.username, pin:session.pin, ids, assignTo });
+    if(!r.ok) return showToast(r.error||"Failed");
+    showToast(`Assigned ${r.changed} contacts to ${assignTo}`); boot();
+  };
+
+  document.getElementById("refreshReportBtn").onclick = loadReport;
+  document.getElementById("downloadCsvBtn").onclick = downloadCSV;
+
+  loadUserList();
+}
+
+async function loadUserList(){
+  const box = document.getElementById("userListBox");
+  if(!box) return;
+  const r = await api("listusers", { username:session.username, pin:session.pin });
+  if(!r.ok){ box.innerHTML = `<div class="mini">${esc(r.error||"Could not load users")}</div>`; return; }
+  box.innerHTML = r.users.length ? `
+    <div class="table-wrap"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th></th></tr></thead>
+    <tbody>${r.users.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.fullName)}</td><td>${esc(u.role)}</td><td>${esc(u.active)}</td>
+      <td>${u.role==='admin' ? '' : `<button class="btn red tiny" data-del-user="${esc(u.username)}">Delete</button>`}</td></tr>`).join("")}</tbody></table></div>
+  ` : `<div class="mini">No field users registered yet.</div>`;
+
+  document.querySelectorAll("[data-del-user]").forEach(b => b.onclick = async () => {
+    const username = b.dataset.delUser;
+    if(!confirm(`Delete field user "${username}"? They won't be able to log in anymore.`)) return;
+    const r2 = await api("deleteuser", { username:session.username, pin:session.pin, targetUsername:username });
+    if(r2.ok){
+      showToast(`Deleted ${username}`);
+      loadUserList();
+    }else{
+      showToast(`Your sheet backend doesn't have a "deleteuser" action yet — see the note below the user list`);
+      const box2 = document.getElementById("userListBox");
+      if(box2 && !document.getElementById("deleteUserHelp")){
+        box2.insertAdjacentHTML("beforeend", `
+          <div id="deleteUserHelp" class="notice warn" style="margin-top:10px">
+            To let user deletion actually take effect on the sheet, add a <b>"deleteuser"</b> action to your Apps
+            Script that finds the row where the username matches <code>targetUsername</code> and deletes it (or
+            sets it inactive) — the same way <b>"deletedatabase"</b> already works for contacts. This app is
+            already calling that action; it just needs the matching handler on your script.
+          </div>`);
+      }
+    }
+  });
+}
+
+async function loadReport(){
+  const box = document.getElementById("reportBox");
+  box.innerHTML = "Loading…";
+  const r = await api("getreport", { username:session.username, pin:session.pin });
+  if(!r.ok){ box.innerHTML = esc(r.error||"Failed to load report"); return; }
+  const rows = Object.entries(r.byUser).map(([u,d]) => `<tr><td>${esc(u)}</td><td>${d.updated}</td><td>${esc(JSON.stringify(d.statuses))}</td></tr>`).join("");
+  box.innerHTML = `
+    <div>Total contacts: <b>${r.totalContacts}</b> · Total app usage events: <b>${r.usageCount}</b></div>
+    <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>User</th><th>Records worked</th><th>Status breakdown</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="3">No activity yet</td></tr>'}</tbody></table></div>
+  `;
+}
+
+function downloadCSV(){
+  if(!contacts.length) return showToast("No data to export");
+  const headers = ["ID","Name","Mobile","Alt","Address","Status","Remarks","AssignedTo","UpdatedAt","UpdatedBy"];
+  const csv = [headers.join(",")].concat(
+    contacts.map(r => headers.map(h => `"${String(r[h] ?? "").replace(/"/g,'""')}"`).join(","))
+  ).join("\n");
+  const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `cloud-call-master-report-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------------------- file upload: robust header matching ---------------------- */
+// Reduce a header to just its letters/digits, lowercased, so "Mobile No.",
+// "mobile_no", "Mobile No" and "MOBILE-NO" all normalize to "mobileno".
+function normHeader(k){ return String(k||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
+
+const FIELD_MATCHERS = {
+  name:    ["name","fullname","contactname","customername","clientname","personname","leadname"],
+  mobile:  ["mobile","mobileno","mobilenumber","phone","phoneno","phonenumber","contact","contactno","contactnumber","primarymobile","number","mob"],
+  alt:     ["alt","altmobile","altmobileno","altnumber","alternatemobile","alternatenumber","secondarymobile","mobile2","phone2"],
+  address: ["address","addr","location","city","area"],
+};
+
+function mapRow(rawRow){
+  const norm = {};
+  Object.keys(rawRow).forEach(k => { norm[normHeader(k)] = rawRow[k]; });
+  const pick = (keys) => {
+    for(const k of keys){ if(norm[k]!==undefined && String(norm[k]).trim()!=="") return String(norm[k]).trim(); }
+    return "";
+  };
+  return {
+    name: pick(FIELD_MATCHERS.name),
+    mobile: pick(FIELD_MATCHERS.mobile),
+    alt: pick(FIELD_MATCHERS.alt),
+    address: pick(FIELD_MATCHERS.address),
+  };
+}
+
+function parseSpreadsheetFile(file){
+  return new Promise((resolve, reject) => {
+    const ext = file.name.toLowerCase().split(".").pop();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read that file"));
+    reader.onload = ev => {
+      try{
+        let wb;
+        if(ext === "csv"){
+          // Strip a UTF-8 BOM if present — otherwise the very first header
+          // (usually "name") silently fails to match and every row gets skipped.
+          let text = String(ev.target.result || "");
+          if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+          wb = XLSX.read(text, { type:"string" });
+        }else{
+          wb = XLSX.read(new Uint8Array(ev.target.result), { type:"array" });
+        }
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rawRows = XLSX.utils.sheet_to_json(sheet, { defval:"" });
+        const rawHeaders = rawRows.length ? Object.keys(rawRows[0]) : [];
+        const rows = rawRows.map(mapRow).filter(r => r.name || r.mobile);
+        resolve({ rows, rawHeaders, rawCount: rawRows.length });
+      }catch(err){ reject(err); }
+    };
+    if(ext === "csv") reader.readAsText(file); else reader.readAsArrayBuffer(file);
+  });
+}
+
+function bindFileUpload(){
+  const fileInput = document.getElementById("fileInput");
+  const preview = document.getElementById("filePreview");
+  const replaceBtn = document.getElementById("uploadReplaceBtn");
+  const appendBtn = document.getElementById("uploadAppendBtn");
+  if(!fileInput) return;
+  let parsed = null;
+
+  fileInput.onchange = async () => {
+    parsed = null;
+    replaceBtn.disabled = true; appendBtn.disabled = true;
+    const file = fileInput.files && fileInput.files[0];
+    if(!file) { preview.innerHTML = ""; return; }
+    preview.innerHTML = "Reading file…";
+    try{
+      const result = await parseSpreadsheetFile(file);
+      parsed = result;
+      if(!result.rows.length){
+        preview.innerHTML = `<span style="color:var(--red)">Found ${result.rawCount} row(s) but couldn't find a name or mobile column.</span>
+          Detected headers: ${result.rawHeaders.length ? esc(result.rawHeaders.join(", ")) : "(none — is the first row empty?)"}.
+          Rename your columns to something like "Name" and "Mobile" and re-select the file.`;
+      }else{
+        const sample = result.rows.slice(0,3).map(r => `${esc(r.name||"—")} · ${esc(r.mobile||"—")}`).join("<br/>");
+        preview.innerHTML = `<span style="color:var(--green)">Read ${result.rows.length} usable row(s) out of ${result.rawCount}.</span><br/>
+          Preview: <br/>${sample}${result.rows.length>3 ? "<br/>…" : ""}`;
+        replaceBtn.disabled = false; appendBtn.disabled = false;
+      }
+    }catch(err){
+      console.error(err);
+      preview.innerHTML = `<span style="color:var(--red)">Could not read that file — make sure it's a valid CSV or XLSX.</span>`;
+    }
+  };
+
+  const runUpload = async (mode) => {
+    if(!parsed || !parsed.rows.length) return showToast("Choose a valid file first");
+    replaceBtn.disabled = true; appendBtn.disabled = true;
+    const r = await api("uploadcontacts", { username:session.username, pin:session.pin, rows:parsed.rows, mode });
+    if(!r.ok){ showToast(r.error || "Upload failed"); replaceBtn.disabled = false; appendBtn.disabled = false; return; }
+    showToast(`Uploaded. Total now ${r.total}`);
+    boot();
+  };
+  replaceBtn.onclick = () => {
+    if(!confirm(`Replace the ENTIRE database with these ${parsed.rows.length} contacts? This overwrites what's currently in the sheet.`)) return;
+    runUpload("replace");
+  };
+  appendBtn.onclick = () => runUpload("append");
+}
+
+boot();
+})();
+</script>
+</body>
+</html>
