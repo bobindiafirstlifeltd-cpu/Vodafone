@@ -214,7 +214,7 @@ const LS_SESSION = "ccm_session_v1";
 const LS_HIDDEN_PREFIX = "ccm_hidden_"; // + username -> array of contact IDs hidden from that user's queue (admin fallback only)
 const LS_DRAFT_PREFIX = "ccm_draft_";   // + username -> {id: remarksText} unsent remarks drafts
 const LS_QUEUE_RETRY = "ccm_retry_queue_v1"; // failed updates waiting to sync
-const LS_PROFILE_PREFIX = "ccm_profilelink_"; // + username -> saved profile/e-card link
+const LS_PROFILE_PREFIX = "ccm_sharelink_"; // + key + username -> saved shareable link
 const STATUS_OPTIONS = ["Pending","Interested","Not Interested","Callback","Busy","Wrong Number","No Answer","Dropped","Follow Up","Do Not Call","Closed"];
 
 const app = document.getElementById("app");
@@ -224,7 +224,7 @@ let session = JSON.parse(localStorage.getItem(LS_SESSION) || "null");
 let contacts = [];
 let usageCount = null;
 let usageBadgeDismissed = sessionStorage.getItem("ccm_usage_dismissed") === "1";
-let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showProfilePanel:false, dirty:false };
+let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, dirty:false };
 
 /* ---------------------- small helpers ---------------------- */
 function showToast(msg, ms=2600){
@@ -244,8 +244,11 @@ function cleanNumber(raw){
   if(d.length>10 && d.startsWith("0")) d = d.replace(/^0+/,"");
   if(d.length===10) d = "91"+d;
   else if(d.length===11 && d.startsWith("0")) d = "91"+d.slice(1);
-  return d; // e.g. 91XXXXXXXXXX
+  return d; // e.g. 91XXXXXXXXXX — used for wa.me and sms: links (no plus sign)
 }
+// tel: links need a leading "+" for the country code to dial reliably on most
+// phones/carriers — wa.me/sms: must NOT have it, which is why this is separate.
+function telNumber(raw){ return "+" + cleanNumber(raw); }
 function copyToClipboard(text){
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(()=>showToast("Number copied")).catch(()=>showToast("Could not copy"));
@@ -433,9 +436,20 @@ function clearDraft(id){ const d = getDrafts(); delete d[id]; localStorage.setIt
 // share it straight to a prospect's WhatsApp with one tap. Stored per user on
 // this device; also tries to sync to the sheet if a "saveprofilelink" action
 // exists on the backend, but never depends on it.
-function profileLinkKey(){ return LS_PROFILE_PREFIX + session.username; }
-function getProfileLink(){ return localStorage.getItem(profileLinkKey()) || ""; }
-function setProfileLinkLocal(link){ localStorage.setItem(profileLinkKey(), link); }
+/* ---------------------- Shareable links (Profile / Plan Benefits / Join IFL) ---------------------- */
+// Each field user can save a few links they hand out to prospects — their own
+// profile, plan benefits, why-join-IFL — and one-tap share any of them to a
+// contact's WhatsApp. Stored per user on this device; also tries to sync to
+// the sheet if a "saveprofilelink" action exists on the backend, but never
+// depends on it.
+const SHARE_LINKS = [
+  { key:"profile",      icon:"🔗", label:"Profile Link",         shareLabel:"Share My Profile",      msg:name => `Hi ${name||""}, here's my profile/details:` },
+  { key:"benefitplans", icon:"📋", label:"Benefit for Plans",     shareLabel:"Share Plan Benefits",   msg:name => `Hi ${name||""}, here are the benefits of our plans:` },
+  { key:"benefitjoin",  icon:"🤝", label:"Benefit to Join IFL",   shareLabel:"Share IFL Join Benefits", msg:name => `Hi ${name||""}, here's why you should join IndiaFirst Life:` },
+];
+function shareLinkKey(key){ return LS_PROFILE_PREFIX + key + "_" + session.username; }
+function getShareLink(key){ return localStorage.getItem(shareLinkKey(key)) || ""; }
+function setShareLink(key, val){ localStorage.setItem(shareLinkKey(key), val); }
 
 function renderUser(){
   const list = filteredContacts();
@@ -447,7 +461,6 @@ function renderUser(){
   const drafts = getDrafts();
   const draftText = rec && drafts[rec.ID] !== undefined ? drafts[rec.ID] : (rec ? (rec.Remarks||"") : "");
   const hasDraft = rec && drafts[rec.ID] !== undefined && drafts[rec.ID] !== (rec.Remarks||"");
-  const profileLink = getProfileLink();
 
   app.innerHTML = `
     <div class="wrap">
@@ -461,24 +474,26 @@ function renderUser(){
         </div>
         <div class="toolbar">
           <span class="badge">${done}/${total} worked</span>
-          <button id="openProfileBtn" class="btn dark small">🔗 Profile Link</button>
+          <button id="openLinksBtn" class="btn dark small">🔗 Share Links</button>
           <button id="openDrawerBtn" class="btn dark small queue-toggle">☰ Queue (${total})</button>
           <button id="logoutBtn" class="btn ghost small">Logout</button>
         </div>
       </div>
 
-      ${ui.showProfilePanel ? `
+      ${ui.showLinksPanel ? `
       <div class="glass section">
-        <div class="section-title"><span>Your Profile Link</span>
-          <button id="closeProfileBtn" class="icon-btn" title="Close">✕</button>
+        <div class="section-title"><span>Your Share Links</span>
+          <button id="closeLinksBtn" class="icon-btn" title="Close">✕</button>
         </div>
-        <div class="mini" style="margin-bottom:8px">Paste a link to your profile, e-business card, or product catalog here — anything you want prospects to see. Once saved, a "Share My Profile" button appears on every contact so you can send it over WhatsApp in one tap.</div>
-        <input id="profileLinkInput" type="text" placeholder="https://…" value="${esc(profileLink)}"/>
-        <div class="toolbar" style="margin-top:10px">
-          <button id="saveProfileLinkBtn" class="btn primary small">Save link</button>
-          ${profileLink ? `<a class="btn dark small" href="${esc(profileLink)}" target="_blank" rel="noopener">Preview</a>
-          <button id="copyProfileLinkBtn" class="btn ghost small">Copy</button>` : ""}
-        </div>
+        <div class="mini" style="margin-bottom:8px">Save links you want to send prospects — your own profile, plan benefits, or reasons to join IFL. Once saved, one-tap WhatsApp share buttons appear on every contact.</div>
+        ${SHARE_LINKS.map(d => `
+          <div class="label">${d.icon} ${esc(d.label)}</div>
+          <div class="toolbar" style="margin-bottom:10px">
+            <input id="linkInput_${d.key}" type="text" placeholder="https://…" value="${esc(getShareLink(d.key))}" style="flex:1;min-width:180px"/>
+            <button class="btn primary small" data-save-link="${d.key}">Save</button>
+            ${getShareLink(d.key) ? `<button class="btn ghost small" data-copy-link="${d.key}">Copy</button>` : ""}
+          </div>
+        `).join("")}
       </div>` : ""}
 
       <div class="glass section" style="padding:12px 16px">
@@ -517,12 +532,14 @@ function renderUser(){
               <div>
                 <div class="name">${esc(rec.Name||"Unnamed")}</div>
                 <div class="phone-row">
-                  <a class="phone" href="tel:${cleanNumber(rec.Mobile)}">📞 ${esc(rec.Mobile||"—")}</a>
+                  <a class="phone" href="tel:${telNumber(rec.Mobile)}">📞 ${esc(rec.Mobile||"—")}</a>
                   <button class="copy-chip" id="copyBtn">Copy</button>
                 </div>
               </div>
             </div>
-            ${profileLink ? `<div class="toolbar" style="margin-top:10px"><button class="btn dark small" id="shareProfileBtn">📇 Share My Profile via WhatsApp</button></div>` : ""}
+            ${SHARE_LINKS.filter(d=>getShareLink(d.key)).length ? `<div class="toolbar" style="margin-top:10px">
+              ${SHARE_LINKS.filter(d=>getShareLink(d.key)).map(d=>`<button class="btn dark small" data-share="${d.key}">${d.icon} ${esc(d.shareLabel)}</button>`).join("")}
+            </div>` : ""}
             <div class="tabs">
               ${STATUS_OPTIONS.map(s=>`<button class="tab ${rec.Status===s?"active":""}" data-status="${s}">${s}</button>`).join("")}
             </div>
@@ -536,7 +553,7 @@ function renderUser(){
               </div>
             </div>
             <div class="actions">
-              <a class="btn green" href="tel:${cleanNumber(rec.Mobile)}">📞 Call</a>
+              <a class="btn green" href="tel:${telNumber(rec.Mobile)}">📞 Call</a>
               <button class="btn blue" id="waBtn">💬 WhatsApp</button>
               <button class="btn purple" id="smsBtn">✉️ Message</button>
               <button class="btn primary" id="saveBtn">💾 Save</button>
@@ -555,7 +572,7 @@ function renderUser(){
 
     ${rec ? `
     <div class="mobile-dock">
-      <a class="dock-call" href="tel:${cleanNumber(rec.Mobile)}"><span class="ic">📞</span>Call</a>
+      <a class="dock-call" href="tel:${telNumber(rec.Mobile)}"><span class="ic">📞</span>Call</a>
       <button id="dockWa"><span class="ic">💬</span>WhatsApp</button>
       <button id="dockSms"><span class="ic">✉️</span>Message</button>
       <button id="dockNext"><span class="ic">▶</span>Next</button>
@@ -566,21 +583,20 @@ function renderUser(){
   bindUsageBadge();
   document.getElementById("logoutBtn").onclick = () => { session=null; saveSession(); renderLogin(); };
 
-  const openProfileBtn = document.getElementById("openProfileBtn");
-  if(openProfileBtn) openProfileBtn.onclick = () => { ui.showProfilePanel = !ui.showProfilePanel; renderUser(); };
-  const closeProfileBtn = document.getElementById("closeProfileBtn");
-  if(closeProfileBtn) closeProfileBtn.onclick = () => { ui.showProfilePanel = false; renderUser(); };
-  const saveProfileLinkBtn = document.getElementById("saveProfileLinkBtn");
-  if(saveProfileLinkBtn) saveProfileLinkBtn.onclick = async () => {
-    const val = document.getElementById("profileLinkInput").value.trim();
+  const openLinksBtn = document.getElementById("openLinksBtn");
+  if(openLinksBtn) openLinksBtn.onclick = () => { ui.showLinksPanel = !ui.showLinksPanel; renderUser(); };
+  const closeLinksBtn = document.getElementById("closeLinksBtn");
+  if(closeLinksBtn) closeLinksBtn.onclick = () => { ui.showLinksPanel = false; renderUser(); };
+  document.querySelectorAll("[data-save-link]").forEach(b => b.onclick = () => {
+    const key = b.dataset.saveLink;
+    const val = document.getElementById("linkInput_"+key).value.trim();
     if(val && !/^https?:\/\//i.test(val)){ showToast("Link should start with http:// or https://"); return; }
-    setProfileLinkLocal(val);
-    api("saveprofilelink", { username:session.username, pin:session.pin, link:val }).catch(()=>{});
-    showToast(val ? "Profile link saved" : "Profile link cleared");
+    setShareLink(key, val);
+    api("saveprofilelink", { username:session.username, pin:session.pin, key, link:val }).catch(()=>{});
+    showToast(val ? "Link saved" : "Link cleared");
     renderUser();
-  };
-  const copyProfileLinkBtn = document.getElementById("copyProfileLinkBtn");
-  if(copyProfileLinkBtn) copyProfileLinkBtn.onclick = () => copyToClipboard(profileLink);
+  });
+  document.querySelectorAll("[data-copy-link]").forEach(b => b.onclick = () => copyToClipboard(getShareLink(b.dataset.copyLink)));
 
   const openDrawerBtn = document.getElementById("openDrawerBtn");
   const overlay = document.getElementById("drawerOverlay");
@@ -621,12 +637,14 @@ function renderUser(){
     const prevBtn = document.getElementById("prevBtn"); if(prevBtn) prevBtn.onclick = goPrev;
     const skipBtn = document.getElementById("skipBtn"); if(skipBtn) skipBtn.onclick = goNext;
     const copyBtn = document.getElementById("copyBtn"); if(copyBtn) copyBtn.onclick = () => copyToClipboard(rec.Mobile||"");
-    const shareProfileBtn = document.getElementById("shareProfileBtn");
-    if(shareProfileBtn) shareProfileBtn.onclick = () => {
+    document.querySelectorAll("[data-share]").forEach(b => b.onclick = () => {
+      const def = SHARE_LINKS.find(x => x.key === b.dataset.share);
+      const link = getShareLink(def.key);
       if(!num) return showToast("No mobile number");
-      const msg = `Hi ${rec.Name||""}, here's my profile/details: ${profileLink}`;
+      if(!link) return showToast("Save this link first");
+      const msg = `${def.msg(rec.Name)} ${link}`;
       window.open(`https://wa.me/${num}?text=${encodeURIComponent(msg)}`, "_blank", "noopener");
-    };
+    });
 
     const dockWa = document.getElementById("dockWa"); if(dockWa) dockWa.onclick = openWa;
     const dockSms = document.getElementById("dockSms"); if(dockSms) dockSms.onclick = openSms;
@@ -641,22 +659,24 @@ function focusEnd(id){
   const v = el.value; el.value=""; el.value=v;
 }
 
+// Tapping a status tab must always visibly respond immediately, even if the
+// network is slow or the save fails — so we update the tab colour and local
+// state right away, then sync to the sheet in the background and queue a
+// retry if that sync fails, instead of leaving the tap looking "stuck".
 async function saveRecord(rec, status, remarks){
+  rec.Status = status;
+  if(remarks!==undefined) rec.Remarks = remarks;
+  clearDraft(rec.ID);
+  renderUser();
+
   const payload = { username:session.username, pin: session.pin, id:rec.ID, status, remarks: remarks===undefined?rec.Remarks:remarks };
   const r = await api("updatecontact", payload);
   if(!r.ok){
-    if(r.offline){
-      queueForRetry(payload);
-      showToast("No connection — saved on this device, will sync automatically");
-    }else{
-      return showToast(r.error || "Save failed — check connection");
-    }
+    queueForRetry(payload);
+    showToast(r.offline ? "No connection — saved on this device, will sync automatically" : `Saved on this device — will retry syncing (${r.error||"sheet error"})`);
   }else{
     showToast("Saved to Google Sheet");
   }
-  rec.Status = status; if(remarks!==undefined) rec.Remarks = remarks;
-  clearDraft(rec.ID);
-  renderUser();
 }
 
 /* ---------------------- ADMIN VIEW ---------------------- */
