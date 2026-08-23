@@ -120,8 +120,30 @@ textarea{min-height:90px;resize:vertical}
 .copy-chip:hover{color:var(--gold);border-color:rgba(245,197,66,.4)}
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .tab{padding:9px 11px;border-radius:999px;background:#0b1324;color:var(--text);border:1px solid rgba(255,255,255,.10);
-  cursor:pointer;font-size:12px;font-weight:800}
-.tab.active{background:linear-gradient(135deg,rgba(245,197,66,.96),rgba(255,229,143,.96));color:#1b1600}
+  cursor:pointer;font-size:12px;font-weight:800;
+  transition:background .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
+.tab:active{transform:scale(.96)}
+.tab.active{background:linear-gradient(135deg,rgba(245,197,66,.96),rgba(255,229,143,.96));color:#1b1600;border-color:transparent}
+
+/* ---- Card entrance (subtle, not distracting) ---- */
+@keyframes cardIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.call-card{animation:cardIn .22s ease}
+
+/* ---- Save status pill: Saving… / Saved / Failed ---- */
+.save-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;padding:6px 11px;
+  border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--muted);
+  transition:background .18s ease,color .18s ease,border-color .18s ease}
+.save-pill.saving{background:rgba(96,165,250,.14);border-color:rgba(96,165,250,.3);color:#cfe3ff}
+.save-pill.saving .dot{width:7px;height:7px;border-radius:999px;background:#60a5fa;animation:pulseDot 1s ease-in-out infinite}
+.save-pill.saved{background:rgba(37,211,102,.16);border-color:rgba(37,211,102,.32);color:#b6f5d0}
+.save-pill.error{background:rgba(255,100,118,.14);border-color:rgba(255,100,118,.3);color:#ffd3d9}
+@keyframes pulseDot{0%,100%{opacity:.35}50%{opacity:1}}
+
+/* ---- User Base lookup ---- */
+.userbase-box{border:1px solid rgba(245,197,66,.22);background:rgba(245,197,66,.06);border-radius:16px;padding:12px;margin-bottom:14px}
+.userbase-row{display:flex;gap:8px}
+.userbase-row input{flex:1;min-width:0}
+.userbase-nav{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .data{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
 .kv{padding:10px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid var(--line);min-width:0}
 .kv .k{font-size:11px;color:var(--muted);margin-bottom:3px}
@@ -151,6 +173,7 @@ table{width:100%;min-width:820px;border-collapse:collapse;background:rgba(255,25
 th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:9px 10px;font-size:12px;text-align:left}
 th{position:sticky;top:0;background:#0d1630}
 tr.row-hidden{opacity:.4}
+tr.row-active{background:rgba(245,197,66,.10)}
 .toast{position:fixed;right:14px;bottom:20px;z-index:9999;background:rgba(9,14,25,.96);color:var(--text);
   border:1px solid var(--line);box-shadow:var(--shadow);border-radius:14px;padding:12px 14px;min-width:220px;
   max-width:340px;display:none}
@@ -321,7 +344,19 @@ function cornerLogoutHtml(){
 }
 function bindCornerLogout(){
   const b = document.getElementById("cornerLogoutBtn");
-  if(b) b.onclick = () => { session=null; saveSession(); renderLogin(); };
+  if(b) b.onclick = () => {
+    // Logging out is a signal the user wants this device clean — clear the
+    // cached customer data (names/numbers) and drafts for this account so
+    // they don't linger in localStorage on a shared/lost device.
+    if(session){
+      try{
+        localStorage.removeItem(contactsCacheKey());
+        localStorage.removeItem(lastPosKey());
+        localStorage.removeItem(draftKey());
+      }catch(e){}
+    }
+    session=null; saveSession(); renderLogin();
+  };
 }
 
 /* ---------------------- "My Report" — user-facing report fetch ----------------------
@@ -376,6 +411,55 @@ const PLAN_CONTACTS  = 500;
 const RAZORPAY_KEY_ID = "RAZORPAY_KEY_ID_HERE"; // <-- paste your Razorpay Key ID
 const LS_LAST_PURCHASE = "ccm_last_purchase_v1";
 
+/* ---------------------- Login attempt throttling ----------------------
+   This is a DEVICE-side speed bump only — it slows down someone guessing
+   PINs through this app's own login screen. It cannot stop someone who
+   calls BACKEND_URL directly (curl/script), and clearing browser storage
+   resets it. Real brute-force protection (rate limiting per IP/username,
+   PIN hashing, lockouts that survive across devices) has to live in the
+   Apps Script backend — that code isn't part of this file, so it can't
+   be added here. This just raises the bar for casual attempts via the UI. */
+const LS_LOGIN_ATTEMPTS = "ccm_login_attempts_v1"; // { [username]: { count, lockUntil } }
+function getLoginAttempts(){ try{ return JSON.parse(localStorage.getItem(LS_LOGIN_ATTEMPTS) || "{}"); }catch(e){ return {}; } }
+function setLoginAttempts(obj){ try{ localStorage.setItem(LS_LOGIN_ATTEMPTS, JSON.stringify(obj)); }catch(e){} }
+function loginLockStatus(username){
+  const all = getLoginAttempts();
+  const rec = all[String(username||"").trim().toLowerCase()];
+  if(!rec || !rec.lockUntil || rec.lockUntil <= Date.now()) return { locked:false };
+  return { locked:true, msLeft: rec.lockUntil - Date.now() };
+}
+function recordFailedLogin(username){
+  const all = getLoginAttempts();
+  const key = String(username||"").trim().toLowerCase();
+  const rec = all[key] || { count:0, lockUntil:0 };
+  rec.count += 1;
+  // Progressive lockout: 5 fails -> 30s, 8 fails -> 2min, 12+ fails -> 10min.
+  if(rec.count >= 12) rec.lockUntil = Date.now() + 10*60*1000;
+  else if(rec.count >= 8) rec.lockUntil = Date.now() + 2*60*1000;
+  else if(rec.count >= 5) rec.lockUntil = Date.now() + 30*1000;
+  all[key] = rec;
+  setLoginAttempts(all);
+}
+function clearLoginAttempts(username){
+  const all = getLoginAttempts();
+  delete all[String(username||"").trim().toLowerCase()];
+  setLoginAttempts(all);
+}
+
+/* ---------------------- Weak PIN detection ----------------------
+   Advisory only — blocks the most guessable PINs (all-same-digit,
+   simple runs) from being created through this UI. A determined
+   attacker calling the backend directly isn't affected by this either;
+   it just stops an admin from accidentally handing out "111111" or
+   "123456" to a field user. */
+function weakPinReason(pin){
+  const p = String(pin||"");
+  if(p.length < 6) return "Use at least 6 digits — shorter PINs are much easier to guess.";
+  if(/^(\d)\1+$/.test(p)) return "Avoid a repeated digit like 111111 — it's one of the first things guessed.";
+  if("0123456789".includes(p) || "9876543210".includes(p)) return "Avoid a simple run like 123456 — it's one of the first things guessed.";
+  return null;
+}
+
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
 
@@ -383,7 +467,8 @@ let session = JSON.parse(localStorage.getItem(LS_SESSION) || "null");
 let contacts = [];
 let usageCount = null;
 let usageBadgeDismissed = sessionStorage.getItem("ccm_usage_dismissed") === "1";
-let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, showBulkWaPanel:false, bulkWaTemplate:"Hello {name}, this is regarding your policy enquiry. Let us know if you have any questions!", dirty:false };
+let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, showBulkWaPanel:false, showQueueTable:false, bulkWaTemplate:"Hello {name}, this is regarding your policy enquiry. Let us know if you have any questions!", dirty:false, userBaseValue:"", saveState:null };
+let savingInFlight = false; // blocks duplicate Save submissions while a save is in flight
 
 /* ---------------------- Bulk WhatsApp: sent-tracking (per user, per device) ----------------------
    WhatsApp has no public API for unattended bulk sending — automating the
@@ -504,8 +589,11 @@ async function refreshUsage(){
 function isValidEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v||"").trim()); }
 function isValidMobile(v){ return String(v||"").replace(/\D/g,"").length >= 10; }
 function generatePin(len=6){
-  let p = "";
-  for(let i=0;i<len;i++) p += Math.floor(Math.random()*10);
+  let p;
+  do{
+    p = "";
+    for(let i=0;i<len;i++) p += Math.floor(Math.random()*10);
+  } while(weakPinReason(p));
   return p;
 }
 function loadRazorpayScript(){
@@ -645,8 +733,7 @@ function renderLogin(){
         <input id="loginPin" type="password" placeholder="4-6 digit PIN" inputmode="numeric"/>
         <button id="loginBtn" class="btn primary full" style="margin-top:14px">Log in</button>
         <div class="notice" style="margin-top:14px">
-          Admin username is always <b>admin</b>. Field users log in with the username and PIN the admin
-          gave them. Ask your admin if you don't have one.
+          Field users log in with the username and PIN their admin gave them. Ask your admin if you don't have one.
         </div>
         <div class="notice" style="margin-top:10px">
           New here? Tap <b>Buy Access</b> in the corner to purchase your own login instantly —
@@ -666,6 +753,11 @@ function renderLogin(){
     const username = document.getElementById("loginUser").value.trim();
     const pin = document.getElementById("loginPin").value.trim();
     if(!username || !pin) return showToast("Enter username and PIN");
+    const lock = loginLockStatus(username);
+    if(lock.locked){
+      const secs = Math.ceil(lock.msLeft/1000);
+      return showToast(`Too many failed attempts. Try again in ${secs>=60 ? Math.ceil(secs/60)+" min" : secs+"s"}.`);
+    }
     const btn = document.getElementById("loginBtn"); btn.disabled = true; btn.textContent = "Logging in…";
     const slowNote = setTimeout(() => { if(!btn.disabled) return; btn.textContent = "Still connecting…"; }, 4000);
     let r;
@@ -674,11 +766,13 @@ function renderLogin(){
     }catch(e){
       clearTimeout(slowNote);
       btn.disabled = false; btn.textContent = "Log in";
+      recordFailedLogin(username);
       return showToast(e.message || "Login timed out — please try again");
     }
     clearTimeout(slowNote);
     btn.disabled = false; btn.textContent = "Log in";
-    if(!r.ok) return showToast(r.error || "Login failed");
+    if(!r.ok){ recordFailedLogin(username); return showToast(r.error || "Login failed"); }
+    clearLoginAttempts(username);
     session = { username:r.username, role:r.role, fullName:r.fullName || r.username, pin };
     saveSession();
     showToast(`Welcome, ${session.fullName}`);
@@ -793,6 +887,31 @@ function filteredContacts(){
   }
   return list;
 }
+/* ---------------------- Record navigation (buttons + keyboard share this) ---------------------- */
+function goNextRecord(){ const list = filteredContacts(); ui.currentIndex = (ui.currentIndex+1) % Math.max(list.length,1); renderUser(); }
+function goPrevRecord(){ const list = filteredContacts(); ui.currentIndex = (ui.currentIndex-1+list.length) % Math.max(list.length,1); renderUser(); }
+function goFirstRecord(){ ui.currentIndex = 0; renderUser(); }
+function goLastRecord(){ const list = filteredContacts(); ui.currentIndex = Math.max(list.length-1,0); renderUser(); }
+
+/* ---------------------- USER BASE: jump directly to a customer by their ID ----------------------
+   Looks up the ID against everything assigned to this user (ignoring the
+   current search/status filter, since the number a field user is handed
+   might not match whatever filter happens to be active), then clears the
+   filter and opens straight to that record. */
+function loadByUserBase(raw){
+  const q = String(raw||"").trim();
+  if(!q) return showToast("Enter a User Base number");
+  const match = visibleContacts().find(c => String(c.ID).trim() === q);
+  if(!match){ showToast(`No customer record found for User Base number "${q}".`); return; }
+  ui.statusFilter = "All";
+  ui.search = "";
+  const idx = filteredContacts().findIndex(c => String(c.ID) === String(match.ID));
+  ui.currentIndex = idx >= 0 ? idx : 0;
+  ui.drawerOpen = false;
+  renderUser();
+  showToast(`Loaded customer ${match.ID} — ${match.Name || "Unnamed"}`);
+}
+
 function draftKey(){ return LS_DRAFT_PREFIX + session.username; }
 function getDrafts(){ return JSON.parse(localStorage.getItem(draftKey()) || "{}"); }
 function setDraft(id, text){ const d = getDrafts(); d[id] = text; localStorage.setItem(draftKey(), JSON.stringify(d)); }
@@ -854,6 +973,36 @@ function renderBulkWaPanel(){
   </div>`;
 }
 
+function renderQueueTablePanel(){
+  const list = filteredContacts();
+  return `
+  <div class="glass section">
+    <div class="section-title"><span>🗂 Calling Queue</span>
+      <button id="closeQueueTableBtn" class="icon-btn" title="Close">✕</button>
+    </div>
+    <div class="mini" style="margin-bottom:8px">${list.length} contact(s) in your current view (search/status filter applies). Tap Open to jump straight to a customer.</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Customer</th><th>Phone</th><th>Status</th><th>Response</th><th></th></tr></thead>
+        <tbody>
+          ${list.map((c,idx)=>{
+            const resp = String(c.Remarks||"");
+            const respShort = resp.length>40 ? resp.slice(0,40)+"…" : resp;
+            return `<tr class="${idx===ui.currentIndex?"row-active":""}">
+              <td>${esc(c.ID)}</td>
+              <td>${esc(c.Name||"Unnamed")}</td>
+              <td>${esc(c.Mobile||"—")}</td>
+              <td><span class="badge">${esc(c.Status||"Pending")}</span></td>
+              <td>${esc(respShort||"—")}</td>
+              <td><button class="btn dark tiny" data-open-qi="${idx}">Open</button></td>
+            </tr>`;
+          }).join("") || `<tr><td colspan="6">No contacts match your current filters.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 function renderUser(){
   const list = filteredContacts();
   if(!ui.restoredPosition){
@@ -891,6 +1040,7 @@ function renderUser(){
           <button id="downloadMyReportBtn" class="btn dark small">⬇ Download My Report</button>
           <button id="openBulkWaBtn" class="btn green small">📤 Bulk WhatsApp (${bulkWaQueue().length})</button>
           <button id="openLinksBtn" class="btn dark small">🔗 Share Links</button>
+          <button id="openQueueTableBtn" class="btn dark small">🗂 Table (${total})</button>
           <button id="openDrawerBtn" class="btn dark small queue-toggle">☰ Queue (${total})</button>
         </div>
       </div>
@@ -902,6 +1052,7 @@ function renderUser(){
       </div>` : ""}
 
       ${ui.showBulkWaPanel ? renderBulkWaPanel() : ""}
+      ${ui.showQueueTable ? renderQueueTablePanel() : ""}
 
       ${ui.showLinksPanel ? `
       <div class="glass section">
@@ -931,6 +1082,18 @@ function renderUser(){
             <span>Filters</span>
             <button id="drawerCloseBtn" class="icon-btn drawer-close" title="Hide queue">✕</button>
           </div>
+          <div class="userbase-box">
+            <div class="section-title" style="margin-bottom:6px"><span>User Base</span></div>
+            <div class="userbase-row">
+              <input id="userBaseInput" type="text" inputmode="numeric" placeholder="Enter ID e.g. 105" value="${esc(ui.userBaseValue)}"/>
+              <button id="userBaseLoadBtn" class="btn primary small">Load</button>
+            </div>
+            <div class="userbase-nav">
+              <button id="userBaseFirstBtn" class="btn dark tiny">⏮ First</button>
+              <button id="userBaseLastBtn" class="btn dark tiny">Last ⏭</button>
+            </div>
+          </div>
+
           <div class="label">Search</div>
           <input id="searchBox" type="text" placeholder="Name, mobile, address…" value="${esc(ui.search)}"/>
           <div class="label">Status</div>
@@ -980,14 +1143,22 @@ function renderUser(){
               <a class="btn green" href="tel:${telNumber(rec.Mobile)}">📞 Call</a>
               <button class="btn blue" id="waBtn">💬 WhatsApp</button>
               <button class="btn purple" id="smsBtn">✉️ Message</button>
-              <button class="btn primary" id="saveBtn">💾 Save</button>
+              <button class="btn primary" id="saveBtn" ${savingInFlight ? "disabled" : ""}>💾 Save</button>
             </div>
             <div class="actions-row2">
               <button class="btn dark" id="prevBtn">◀ Prev</button>
               <button class="btn dark" id="nextBtn">Next ▶</button>
               <button class="btn ghost" id="skipBtn">Skip</button>
             </div>
-            <div class="card-foot mini">Record ${ui.currentIndex+1} of ${list.length}</div>
+            <div class="card-foot">
+              <span class="mini">Record ${ui.currentIndex+1} of ${list.length}</span>
+              ${ui.saveState && String(ui.saveState.id)===String(rec.ID) ? `
+                <span class="save-pill ${ui.saveState.phase}">
+                  ${ui.saveState.phase==="saving" ? `<span class="dot"></span> Saving…` : ""}
+                  ${ui.saveState.phase==="saved" ? `✓ Response Saved` : ""}
+                  ${ui.saveState.phase==="error" ? `⚠ Unable to save. Will retry.` : ""}
+                </span>` : ""}
+            </div>
           </div>
           ` : `<div class="notice">No contacts to show. Ask your admin to assign some, or adjust your filters.</div>`}
         </main>
@@ -1023,12 +1194,34 @@ function renderUser(){
   });
 
   const openLinksBtn = document.getElementById("openLinksBtn");
-  if(openLinksBtn) openLinksBtn.onclick = () => { ui.showLinksPanel = !ui.showLinksPanel; ui.showBulkWaPanel=false; renderUser(); };
+  if(openLinksBtn) openLinksBtn.onclick = () => { ui.showLinksPanel = !ui.showLinksPanel; ui.showBulkWaPanel=false; ui.showQueueTable=false; renderUser(); };
 
   const openBulkWaBtn = document.getElementById("openBulkWaBtn");
-  if(openBulkWaBtn) openBulkWaBtn.onclick = () => { ui.showBulkWaPanel = !ui.showBulkWaPanel; ui.showLinksPanel=false; renderUser(); };
+  if(openBulkWaBtn) openBulkWaBtn.onclick = () => { ui.showBulkWaPanel = !ui.showBulkWaPanel; ui.showLinksPanel=false; ui.showQueueTable=false; renderUser(); };
   const closeBulkWaBtn = document.getElementById("closeBulkWaBtn");
   if(closeBulkWaBtn) closeBulkWaBtn.onclick = () => { ui.showBulkWaPanel = false; renderUser(); };
+
+  const openQueueTableBtn = document.getElementById("openQueueTableBtn");
+  if(openQueueTableBtn) openQueueTableBtn.onclick = () => { ui.showQueueTable = !ui.showQueueTable; ui.showLinksPanel=false; ui.showBulkWaPanel=false; renderUser(); };
+  const closeQueueTableBtn = document.getElementById("closeQueueTableBtn");
+  if(closeQueueTableBtn) closeQueueTableBtn.onclick = () => { ui.showQueueTable = false; renderUser(); };
+  document.querySelectorAll("[data-open-qi]").forEach(b => b.onclick = () => {
+    ui.currentIndex = Number(b.dataset.openQi);
+    ui.showQueueTable = false;
+    renderUser();
+  });
+
+  const userBaseInput = document.getElementById("userBaseInput");
+  if(userBaseInput){
+    userBaseInput.oninput = () => { ui.userBaseValue = userBaseInput.value; };
+    userBaseInput.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); loadByUserBase(userBaseInput.value); } });
+  }
+  const userBaseLoadBtn = document.getElementById("userBaseLoadBtn");
+  if(userBaseLoadBtn) userBaseLoadBtn.onclick = () => loadByUserBase(userBaseInput ? userBaseInput.value : ui.userBaseValue);
+  const userBaseFirstBtn = document.getElementById("userBaseFirstBtn");
+  if(userBaseFirstBtn) userBaseFirstBtn.onclick = goFirstRecord;
+  const userBaseLastBtn = document.getElementById("userBaseLastBtn");
+  if(userBaseLastBtn) userBaseLastBtn.onclick = goLastRecord;
   const bulkWaTemplate = document.getElementById("bulkWaTemplate");
   if(bulkWaTemplate) bulkWaTemplate.oninput = () => { ui.bulkWaTemplate = bulkWaTemplate.value; };
   const bulkWaSendBtn = document.getElementById("bulkWaSendBtn");
@@ -1087,15 +1280,13 @@ function renderUser(){
     const openWa = () => { if(!num) return showToast("No mobile number"); window.open(`https://wa.me/${num}?text=${encodeURIComponent("Hello! Thank you for your interest.")}`,"_blank","noopener"); };
     const openSms = () => { if(!num) return showToast("No mobile number"); window.location.href = `sms:${rec.Mobile}?body=${encodeURIComponent("Hello! Thank you for your interest.")}`; };
     const doSave = () => saveRecord(rec, rec.Status || "Pending", currentRemarks());
-    const goNext = () => { ui.currentIndex = (ui.currentIndex+1) % Math.max(list.length,1); renderUser(); };
-    const goPrev = () => { ui.currentIndex = (ui.currentIndex-1+list.length) % Math.max(list.length,1); renderUser(); };
 
     const waBtn = document.getElementById("waBtn"); if(waBtn) waBtn.onclick = openWa;
     const smsBtn = document.getElementById("smsBtn"); if(smsBtn) smsBtn.onclick = openSms;
     const saveBtn = document.getElementById("saveBtn"); if(saveBtn) saveBtn.onclick = doSave;
-    const nextBtn = document.getElementById("nextBtn"); if(nextBtn) nextBtn.onclick = goNext;
-    const prevBtn = document.getElementById("prevBtn"); if(prevBtn) prevBtn.onclick = goPrev;
-    const skipBtn = document.getElementById("skipBtn"); if(skipBtn) skipBtn.onclick = goNext;
+    const nextBtn = document.getElementById("nextBtn"); if(nextBtn) nextBtn.onclick = goNextRecord;
+    const prevBtn = document.getElementById("prevBtn"); if(prevBtn) prevBtn.onclick = goPrevRecord;
+    const skipBtn = document.getElementById("skipBtn"); if(skipBtn) skipBtn.onclick = goNextRecord;
     const copyBtn = document.getElementById("copyBtn"); if(copyBtn) copyBtn.onclick = () => copyToClipboard(rec.Mobile||"");
     document.querySelectorAll("[data-share]").forEach(b => b.onclick = () => {
       const def = SHARE_LINKS.find(x => x.key === b.dataset.share);
@@ -1108,7 +1299,7 @@ function renderUser(){
 
     const dockWa = document.getElementById("dockWa"); if(dockWa) dockWa.onclick = openWa;
     const dockSms = document.getElementById("dockSms"); if(dockSms) dockSms.onclick = openSms;
-    const dockNext = document.getElementById("dockNext"); if(dockNext) dockNext.onclick = goNext;
+    const dockNext = document.getElementById("dockNext"); if(dockNext) dockNext.onclick = goNextRecord;
     const dockSave = document.getElementById("dockSave"); if(dockSave) dockSave.onclick = doSave;
   }
 }
@@ -1124,18 +1315,41 @@ function focusEnd(id){
 // state right away, then sync to the sheet in the background and queue a
 // retry if that sync fails, instead of leaving the tap looking "stuck".
 async function saveRecord(rec, status, remarks){
+  if(savingInFlight) return; // a save is already in progress — ignore repeat taps/Enter
+  savingInFlight = true;
+
+  const finalRemarks = remarks===undefined ? rec.Remarks : remarks;
   rec.Status = status;
-  if(remarks!==undefined) rec.Remarks = remarks;
-  clearDraft(rec.ID);
+  rec.Remarks = finalRemarks;
+  ui.saveState = { id: rec.ID, phase: "saving" };
+  renderUser(); // shows "Saving…" and disables Save immediately — never lies about success early
+
+  const payload = { username:session.username, pin: session.pin, id:rec.ID, status, remarks: finalRemarks };
+  let r;
+  try{ r = await api("updatecontact", payload); }
+  catch(e){ r = { ok:false, error:"network" }; }
+
+  if(!r.ok){
+    // Never lose the user's entered data: keep it queued for retry and keep
+    // it visible in the draft store so a page reload can't wipe it either.
+    queueForRetry(payload);
+    setDraft(rec.ID, finalRemarks);
+    ui.saveState = { id: rec.ID, phase: "error" };
+    showToast(r.offline ? "No connection — saved on this device, will sync automatically" : `Unable to save (${r.error||"sheet error"}) — will retry automatically`);
+  }else{
+    clearDraft(rec.ID);
+    ui.saveState = { id: rec.ID, phase: "saved" };
+    showToast("Saved to Google Sheet");
+  }
+  savingInFlight = false;
   renderUser();
 
-  const payload = { username:session.username, pin: session.pin, id:rec.ID, status, remarks: remarks===undefined?rec.Remarks:remarks };
-  const r = await api("updatecontact", payload);
-  if(!r.ok){
-    queueForRetry(payload);
-    showToast(r.offline ? "No connection — saved on this device, will sync automatically" : `Saved on this device — will retry syncing (${r.error||"sheet error"})`);
-  }else{
-    showToast("Saved to Google Sheet");
+  if(ui.saveState && ui.saveState.phase === "saved"){
+    const savedId = rec.ID;
+    clearTimeout(saveRecord._clearTimer);
+    saveRecord._clearTimer = setTimeout(() => {
+      if(ui.saveState && ui.saveState.id === savedId && ui.saveState.phase === "saved"){ ui.saveState = null; renderUser(); }
+    }, 2200);
   }
 }
 
@@ -1309,6 +1523,8 @@ function renderAdmin(){
     const newPin = document.getElementById("newPin").value.trim();
     const newFullName = document.getElementById("newFullName").value.trim();
     if(!newUsername || !newPin) return showToast("Username and PIN required");
+    const weak = weakPinReason(newPin);
+    if(weak) return showToast(weak);
     const r = await api("registeruser", { username:session.username, pin:session.pin, newUsername, newPin, fullName:newFullName, role:"user" });
     if(!r.ok) return showToast(r.error||"Failed");
     showToast("User saved"); loadUserList();
@@ -1539,6 +1755,44 @@ function bindFileUpload(){
   };
   appendBtn.onclick = () => runUpload("append");
 }
+
+/* ---------------------- Keyboard shortcuts (field-user record navigation) ----------------------
+   Bound once, globally — not re-bound on every render. Only acts when a
+   field user is logged in and a customer card is open, and never hijacks
+   typing in inputs/textareas/selects (so Search, Remarks, PIN, etc. are
+   completely unaffected). Enter → Save, → → Next, ← → Previous. */
+document.addEventListener("keydown", (e) => {
+  if(!session || session.role !== "user") return;
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  const list = filteredContacts();
+  if(!list.length) return;
+  if(e.key === "ArrowRight"){ e.preventDefault(); goNextRecord(); }
+  else if(e.key === "ArrowLeft"){ e.preventDefault(); goPrevRecord(); }
+  else if(e.key === "Enter"){
+    const rec = list[ui.currentIndex];
+    if(rec){ e.preventDefault(); saveRecord(rec, rec.Status || "Pending", (getDrafts()[rec.ID] !== undefined ? getDrafts()[rec.ID] : (rec.Remarks||""))); }
+  }
+});
+
+/* ---------------------- Idle auto-logout ----------------------
+   The session (including the PIN) lives in localStorage for as long as
+   someone stays logged in — that's required since every API call needs
+   the PIN (there's no separate session token from the backend). Auto-
+   logging out after inactivity limits how long that sits exposed on a
+   device that's left unlocked or walked away from. */
+const SESSION_IDLE_LIMIT_MS = 20 * 60 * 1000; // 20 minutes
+let lastActivityAt = Date.now();
+["click","keydown","mousemove","touchstart","scroll"].forEach(evt =>
+  document.addEventListener(evt, () => { lastActivityAt = Date.now(); }, { passive:true })
+);
+setInterval(() => {
+  if(session && (Date.now() - lastActivityAt) > SESSION_IDLE_LIMIT_MS){
+    session = null; saveSession();
+    showToast("Logged out after 20 minutes of inactivity");
+    renderLogin();
+  }
+}, 30000);
 
 boot();
 })();
