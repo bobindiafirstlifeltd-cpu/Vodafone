@@ -174,6 +174,18 @@ th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:9px 10px;font-size:1
 th{position:sticky;top:0;background:#0d1630}
 tr.row-hidden{opacity:.4}
 tr.row-active{background:rgba(245,197,66,.10)}
+
+/* ---- Auto Call ---- */
+.autocall-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:14px 16px;margin-bottom:14px;border:1px solid rgba(245,197,66,.22)}
+.autocall-banner.active{border-color:rgba(37,211,102,.35);background:rgba(37,211,102,.06)}
+.ac-title{font-weight:900;letter-spacing:.02em;font-size:13px}
+.ac-cust{font-weight:800;margin-top:2px}
+.ac-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ac-locked{opacity:.45;pointer-events:none}
+.disposition-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.disposition-grid .disp-btn{min-height:56px;font-size:14px;white-space:normal}
+@media (max-width:420px){ .disposition-grid{grid-template-columns:1fr} }
 .toast{position:fixed;right:14px;bottom:20px;z-index:9999;background:rgba(9,14,25,.96);color:var(--text);
   border:1px solid var(--line);box-shadow:var(--shadow);border-radius:14px;padding:12px 14px;min-width:220px;
   max-width:340px;display:none}
@@ -328,6 +340,7 @@ const LS_QUEUE_RETRY = "ccm_retry_queue_v1"; // failed updates waiting to sync
 const LS_PROFILE_PREFIX = "ccm_sharelink_"; // + key + username -> saved shareable link
 const LS_CACHE_CONTACTS_PREFIX = "ccm_cache_contacts_"; // + username -> {contacts, ts} last-known data for instant reload
 const LS_LASTPOS_PREFIX = "ccm_lastpos_"; // + username -> ID of the contact the user was last viewing/calling
+const LS_AUTOCALL_PREFIX = "ccm_autocall_state_"; // + username -> full Auto Call resume state (see below)
 
 /* ---------------------- Resume where you left off ----------------------
    Whenever the active contact card changes (opened, Next/Prev, tapped in
@@ -338,6 +351,102 @@ function lastPosKey(){ return LS_LASTPOS_PREFIX + (session ? session.username : 
 function saveLastPosition(id){ if(id!=null) localStorage.setItem(lastPosKey(), String(id)); }
 function getLastPosition(){ return localStorage.getItem(lastPosKey()); }
 
+/* =====================================================================
+   AUTO CALL RESUME STATE — persisted per Field User
+   -----------------------------------------------------------------------
+   Keyed by username (LS_AUTOCALL_PREFIX + session.username) so User A's
+   position can never affect User B's — each Field User's saved state
+   lives under its own key and is only ever read/written while that user
+   is the logged-in session.
+
+   Stores (at minimum, per spec): user ID (the key itself), the ordered
+   list of contact IDs in the current Auto Call queue, the current
+   position, the current/last-processed contact ID, processed count,
+   Auto Call status (active/phase), the last action that touched the
+   state, and a timestamp. Contact IDs are the source of truth (never
+   raw array indexes), so a contact being edited/reordered elsewhere
+   can't cause a duplicate or skipped call.
+
+   Written immediately on every state-changing event (see saveAutoCallState
+   call sites) — never only on logout — and read back on boot() so a
+   refresh, browser close, lost connection, or logout/login all resume
+   from the exact same spot. Auto Call itself never auto-starts on
+   restore; the user still presses "Start Auto Call", which then
+   continues the restored queue instead of rebuilding from #1.
+   ===================================================================== */
+function autoCallStateKey(){ return LS_AUTOCALL_PREFIX + (session ? session.username : ""); }
+
+function saveAutoCallState(lastAction){
+  if(!session) return;
+  try{
+    const state = {
+      userId: session.username,
+      queueIds: autoCall.queue.map(c => c.ID),
+      pos: autoCall.pos,
+      processed: autoCall.processed,
+      currentContactId: (autoCall.queue[autoCall.pos] || {}).ID ?? null,
+      lastProcessedContactId: autoCall.pos > 0 ? ((autoCall.queue[autoCall.pos - 1] || {}).ID ?? null) : null,
+      active: autoCall.active,
+      phase: autoCall.phase,
+      lastAction: lastAction || null,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(autoCallStateKey(), JSON.stringify(state));
+  }catch(e){ /* storage full/unavailable — Auto Call still works in-memory this session */ }
+}
+
+/* Rebuilds autoCall.queue/pos from the saved state, re-matched against the
+   freshest contact data (by ID, not index) so a status changed elsewhere
+   is respected. Never sets autoCall.active — resuming is always a
+   deliberate "Start Auto Call" tap, never automatic. */
+function loadAutoCallState(){
+  if(!session) return;
+  try{
+    const raw = localStorage.getItem(autoCallStateKey());
+    if(!raw) return;
+    const state = JSON.parse(raw);
+    if(!state || !Array.isArray(state.queueIds) || !state.queueIds.length) return;
+    const byId = {};
+    visibleContacts().forEach(c => { byId[String(c.ID)] = c; });
+    const rebuilt = state.queueIds.map(id => byId[String(id)]).filter(Boolean);
+    if(!rebuilt.length) return;
+    let pos = rebuilt.findIndex(c => String(c.ID) === String(state.currentContactId));
+    if(pos < 0 && state.lastProcessedContactId != null){
+      const lastIdx = rebuilt.findIndex(c => String(c.ID) === String(state.lastProcessedContactId));
+      pos = lastIdx >= 0 ? lastIdx + 1 : 0;
+    }
+    if(pos < 0) pos = Math.min(state.pos || 0, rebuilt.length - 1);
+    autoCall.queue = rebuilt;
+    autoCall.pos = Math.max(0, Math.min(pos, rebuilt.length));
+    autoCall.processed = state.processed || 0;
+    autoCall.active = false;
+    autoCall.phase = "idle";
+  }catch(e){ /* corrupt/unreadable state — Auto Call just starts fresh */ }
+}
+
+/* Explicit, confirmed-only reset. Never triggered automatically (not on
+   logout, not on refresh) — only this button clears a saved position. */
+function resetAutoCallPosition(){
+  if(!confirm("Reset your saved Auto Call position? The next time you start Auto Call it will restart from the beginning of your eligible list instead of resuming where you left off.")) return;
+  autoCall.queue = [];
+  autoCall.pos = 0;
+  autoCall.processed = 0;
+  autoCall.active = false;
+  autoCall.phase = "idle";
+  ui.lastManualContactId = null;
+  try{ localStorage.removeItem(autoCallStateKey()); }catch(e){}
+  showToast("Auto Call position reset.");
+  renderUser();
+}
+
+/* Marks that the field user deliberately jumped/navigated to a specific
+   contact (as opposed to Auto Call itself moving the cursor while
+   dialing). Read once by startAutoCall() to decide whether a fresh
+   queue should begin at this contact instead of resuming the old
+   saved position — then consumed (cleared) so it doesn't linger and
+   override a *later* resume. */
+function markManualJump(rec){ if(rec) ui.lastManualContactId = rec.ID; }
+
 /* ---------------------- Corner logout (fixed, same spot on every screen) ---------------------- */
 function cornerLogoutHtml(){
   return `<button id="cornerLogoutBtn" class="corner-logout" title="Log out">⏻ Logout</button>`;
@@ -347,15 +456,19 @@ function bindCornerLogout(){
   if(b) b.onclick = () => {
     // Logging out is a signal the user wants this device clean — clear the
     // cached customer data (names/numbers) and drafts for this account so
-    // they don't linger in localStorage on a shared/lost device.
+    // they don't linger in localStorage on a shared/lost device. The Auto
+    // Call resume position and current-contact position are deliberately
+    // NOT cleared here: they must survive logout so the user resumes from
+    // the exact same spot next time they log in (only the explicit Reset
+    // Auto Call Position control may clear that).
     if(session){
+      saveAutoCallState("User logout");
       try{
         localStorage.removeItem(contactsCacheKey());
-        localStorage.removeItem(lastPosKey());
         localStorage.removeItem(draftKey());
       }catch(e){}
     }
-    session=null; saveSession(); renderLogin();
+    session=null; saveSession(); resetSessionUiState(); renderLogin();
   };
 }
 
@@ -395,6 +508,333 @@ function openMyReportModal(){
   document.getElementById("myReportDownloadBtn").onclick = downloadMyReportCSV;
 }
 const STATUS_OPTIONS = ["Pending","Interested","Not Interested","Callback","Busy","Wrong Number","No Answer","Dropped","Follow Up","Do Not Call","Closed"];
+
+/* =====================================================================
+   AUTO CALL FEATURE
+   Steps a field user through their eligible queue one lead at a time:
+   dial (existing tel: mechanism) -> user returns from the phone app ->
+   log a result -> auto-advance to the next lead. Reuses telNumber(),
+   saveRecord(), STATUS_OPTIONS and the existing modal-overlay pattern —
+   no parallel data path, no new backend calls.
+
+   HONEST LIMITATION: a browser cannot detect when a phone call actually
+   connects or ends — that happens entirely inside the native dialer,
+   outside the page. The best available signal is the Page Visibility
+   API: when the tab becomes visible again after being backgrounded (the
+   user leaving for/returning from the dialer), we treat that as "the
+   call is over" and show the result popup. This is reliable on most
+   Android browsers but not guaranteed on every device/WebView, so a
+   manual "I'm back — log this call" button is always shown as a
+   fallback while waiting.
+   ===================================================================== */
+const AUTO_CALL_TERMINAL_STATUSES = ["Not Interested","Do Not Call","Closed","Wrong Number"];
+const AUTO_CALL_MIN_AWAY_MS = 1200; // ignore instant visibility flips (accidental tab switches)
+
+let autoCall = {
+  active: false,      // Stop sets this false immediately, from any phase
+  runId: 0,            // bumped on every Start; async callbacks check it to avoid acting on a stopped/older run
+  queue: [],            // snapshot of eligible leads for this run (built once, reused across Stop/Start so position is preserved)
+  pos: 0,                // index of the current/next lead in queue
+  processed: 0,
+  phase: "idle",          // idle | dialing | awaiting-return | disposition | followup | saving | save-error | completed
+  dialedAt: 0,
+  restored: false,        // true once loadAutoCallState() has run for the current login (guards against re-running mid-session)
+};
+
+function autoCallIsEligible(c){ return !AUTO_CALL_TERMINAL_STATUSES.includes(c.Status || "Pending"); }
+
+function startAutoCall(){
+  if(autoCall.active) return; // guards double-tap / double-bind
+
+  // Which contact is actually on screen right now? This reflects either a
+  // deliberate manual jump (search/tap/User Base/Next-Prev) or a restored
+  // resume position — both already flow through ui.currentIndex.
+  const currentRec = filteredContacts()[ui.currentIndex] || null;
+  const manualJumpActive = ui.lastManualContactId != null && currentRec && String(currentRec.ID) === String(ui.lastManualContactId);
+  const noResumableQueue = !autoCall.queue.length || autoCall.pos >= autoCall.queue.length;
+
+  // Rebuild the queue when there's nothing left to resume (first run, or a
+  // prior run finished/exhausted its queue) OR when a manual jump happened
+  // since the last resume point — a deliberate jump always wins over a
+  // stale saved position (never the other way around).
+  if(noResumableQueue || manualJumpActive){
+    const eligible = visibleContacts().filter(autoCallIsEligible);
+    if(!eligible.length){
+      showToast("No eligible leads to call — everyone assigned to you is Not Interested, Do Not Call, Closed, or has an invalid number.");
+      return;
+    }
+    // Rotate the eligible list so it STARTS at the currently displayed/
+    // jumped contact — e.g. jump to #47 → queue = [47,48,...,100,1,...,46].
+    // This guarantees Auto Call begins exactly where the user jumped and
+    // continues sequentially afterward, while still eventually covering
+    // every eligible contact instead of silently dropping the ones before
+    // the jump point.
+    const startId = currentRec ? currentRec.ID : null;
+    let k = startId != null ? eligible.findIndex(c => String(c.ID) === String(startId)) : -1;
+    if(k < 0) k = 0;
+    autoCall.queue = eligible.slice(k).concat(eligible.slice(0, k));
+    autoCall.pos = 0;
+    autoCall.processed = 0;
+  }
+  ui.lastManualContactId = null; // consumed — this jump has now been honored, don't let it re-trigger a rebuild later
+
+  autoCall.runId += 1;
+  const runId = autoCall.runId;
+  autoCall.active = true;
+  autoCall.phase = "idle";
+  ui.statusFilter = "All";
+  ui.search = "";
+  ui.drawerOpen = false;
+  saveAutoCallState("Auto Call started");
+  renderUser();
+  autoCallDialCurrent(runId);
+}
+
+function stopAutoCall(){
+  if(!autoCall.active) return;
+  autoCall.active = false;
+  autoCall.runId += 1; // invalidate any in-flight visibility/timer callbacks from this run
+  if(autoCall.phase === "dialing" || autoCall.phase === "awaiting-return") autoCall.phase = "idle";
+  // Note: if a disposition/follow-up popup is already open, we deliberately
+  // leave it open — the user can still finish logging that call (rule:
+  // "allow the currently active call to finish where technically
+  // possible"). Its own save handler checks autoCall.active afterwards and
+  // will not auto-dial the next number since it's now false.
+  saveAutoCallState("Auto Call stopped");
+  showToast("Auto Call stopped. Your place in the queue is saved — press Start Auto Call to continue.");
+  renderUser();
+}
+
+function autoCallDialCurrent(runId){
+  if(runId !== autoCall.runId || !autoCall.active) return;
+  if(autoCall.pos >= autoCall.queue.length){ autoCallFinish(runId); return; }
+  const rec = autoCall.queue[autoCall.pos];
+  if(!autoCallIsEligible(rec)){ autoCall.pos += 1; autoCallDialCurrent(runId); return; } // status changed since queue was built — skip
+  const idx = filteredContacts().findIndex(c => String(c.ID) === String(rec.ID));
+  if(idx >= 0) ui.currentIndex = idx;
+
+  const num = telNumber(rec.Mobile);
+  if(!num || num === "+"){
+    showToast(`Skipping ${rec.Name || rec.ID} — no valid mobile number.`);
+    autoCallRecordDisposition(rec, "No Answer", rec.Remarks || "", runId);
+    return;
+  }
+
+  autoCall.phase = "dialing";
+  renderUser();
+  saveAutoCallState("Contact selected"); // persist immediately — this is the position that must survive a refresh/crash mid-dial
+  autoCall.dialedAt = Date.now();
+  autoCall.phase = "awaiting-return";
+  window.location.href = "tel:" + num; // same mechanism as the existing manual Call button/link
+  saveAutoCallState("Call initiated");
+  renderUser();
+}
+
+/* Fires when the user comes back to the tab (Page Visibility API) or taps
+   the manual fallback button — either way, this is our best signal that
+   the call is over and it's time to log a result. */
+function handleAutoCallReturn(manual){
+  if(!autoCall.active || autoCall.phase !== "awaiting-return") return;
+  if(!manual && (Date.now() - (autoCall.dialedAt||0)) < AUTO_CALL_MIN_AWAY_MS) return;
+  const runId = autoCall.runId;
+  const rec = autoCall.queue[autoCall.pos];
+  if(!rec) return;
+  autoCall.phase = "disposition";
+  saveAutoCallState("Call disconnected");
+  renderUser();
+  openAutoCallDispositionModal(rec, runId);
+}
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "visible") handleAutoCallReturn(false);
+});
+
+function closeAutoCallModals(){
+  ["autoCallDispositionOverlay","autoCallFollowUpOverlay","autoCallSaveErrorOverlay"].forEach(id => {
+    const el = document.getElementById(id); if(el) el.remove();
+  });
+}
+
+function openAutoCallDispositionModal(rec, runId){
+  closeAutoCallModals();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.id = "autoCallDispositionOverlay";
+  overlay.innerHTML = `
+    <div class="glass modal-box">
+      <div class="section-title"><span>📞 Call Result</span></div>
+      <div class="mini" style="margin-bottom:12px">
+        Customer: <b>${esc(rec.Name || "Unnamed")}</b><br/>
+        Mobile: <b>${esc(rec.Mobile || "—")}</b><br/>
+        Queue: <b>${autoCall.pos+1} / ${autoCall.queue.length}</b>
+      </div>
+      <div class="disposition-grid">
+        <button class="btn green disp-btn" data-disp="Interested">✅ Interested</button>
+        <button class="btn dark disp-btn" data-disp="Not Interested">✖ Not Interested</button>
+        <button class="btn primary disp-btn" data-disp="Follow Up">📅 Follow Up</button>
+        <button class="btn red disp-btn" data-disp="Do Not Call">🚫 Don't Call</button>
+        <button class="btn ghost disp-btn" data-disp="No Answer" style="grid-column:1/-1">📵 Call Not Connected</button>
+      </div>
+      <button class="btn ghost full" id="autoCallStopFromDisposition" style="margin-top:12px">⏹ Stop Auto Call</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll("[data-disp]").forEach(b => b.onclick = () => {
+    const status = b.dataset.disp;
+    overlay.remove();
+    if(status === "Follow Up"){ openFollowUpModal(rec, runId); return; }
+    const actionLabel = status === "No Answer" ? "Call Not Connected selected"
+      : status === "Not Interested" ? "Not Interested selected"
+      : status === "Interested" ? "Interest selected"
+      : `${status} selected`;
+    autoCallRecordDisposition(rec, status, rec.Remarks || "", runId, actionLabel);
+  });
+  document.getElementById("autoCallStopFromDisposition").onclick = () => { overlay.remove(); stopAutoCall(); };
+}
+
+function openFollowUpModal(rec, runId){
+  closeAutoCallModals();
+  const now = new Date();
+  const minDate = now.toISOString().slice(0,10);
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.id = "autoCallFollowUpOverlay";
+  overlay.innerHTML = `
+    <div class="glass modal-box">
+      <div class="section-title"><span>📅 Schedule Follow-Up</span></div>
+      <div class="mini" style="margin-bottom:10px">${esc(rec.Name || "Unnamed")} · ${esc(rec.Mobile || "—")}</div>
+      <div class="label">Follow-up Date</div>
+      <input type="date" id="fuDate" min="${minDate}" value="${minDate}"/>
+      <div class="label">Follow-up Time</div>
+      <input type="time" id="fuTime" value="10:00"/>
+      <div class="label">Remark (optional)</div>
+      <textarea id="fuRemark" placeholder="e.g. Client asked to call after salary date"></textarea>
+      <div class="mini" style="margin-top:6px">Saved into this contact's Remarks — there's no separate follow-up field in the sheet, so it's kept as plain text there.</div>
+      <div class="toolbar" style="margin-top:14px">
+        <button class="btn primary" id="fuSaveBtn">💾 Save Follow Up</button>
+        <button class="btn ghost" id="fuCancelBtn">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("fuCancelBtn").onclick = () => { overlay.remove(); openAutoCallDispositionModal(rec, runId); };
+  document.getElementById("fuSaveBtn").onclick = () => {
+    const d = document.getElementById("fuDate").value;
+    const t = document.getElementById("fuTime").value;
+    if(!d || !t) return showToast("Pick a follow-up date and time");
+    const dateLabel = new Date(d+"T"+t).toLocaleString("en-IN", { day:"numeric", month:"short", year:"numeric", hour:"numeric", minute:"2-digit", hour12:true });
+    const remark = document.getElementById("fuRemark").value.trim();
+    const composed = `Follow-up: ${dateLabel}${remark ? " — " + remark : ""}`;
+    overlay.remove();
+    autoCallRecordDisposition(rec, "Follow Up", composed, runId, "Follow-up saved");
+  };
+}
+
+/* Saves via the existing saveRecord() — same duplicate-submission lock,
+   same offline retry queue, same Saving/Saved/Failed pill as manual saves.
+   Only advances the queue after a confirmed successful save. */
+async function autoCallRecordDisposition(rec, status, remarks, runId, actionLabel){
+  if(runId !== autoCall.runId) return; // stale callback from a stopped/older run
+  autoCall.phase = "saving";
+  saveAutoCallState(actionLabel || `${status} selected`);
+  renderUser();
+  await saveRecord(rec, status, remarks);
+  if(runId !== autoCall.runId) return; // stopped/restarted while the save was in flight
+
+  if(ui.saveState && String(ui.saveState.id) === String(rec.ID) && ui.saveState.phase === "error"){
+    autoCall.phase = "save-error";
+    saveAutoCallState("Save failed — awaiting retry");
+    renderUser();
+    openAutoCallSaveErrorModal(rec, status, remarks, runId);
+    return;
+  }
+
+  // Contact completed: the same ID is never dialed again from this queue —
+  // advancing pos (not deleting from the array) keeps queueIds/pos stable
+  // for persistence while making re-dialing this ID impossible even if the
+  // page reloads mid-advance, since loadAutoCallState() resumes strictly
+  // AFTER lastProcessedContactId.
+  autoCall.processed += 1;
+  autoCall.pos += 1;
+  saveAutoCallState("Contact completed");
+  if(!autoCall.active){ autoCall.phase = "idle"; saveAutoCallState("Auto Call stopped"); renderUser(); return; } // Stop was pressed during the save — honor it, don't dial next
+  saveAutoCallState("Next contact loaded");
+  autoCallDialCurrent(runId);
+}
+
+function openAutoCallSaveErrorModal(rec, status, remarks, runId){
+  closeAutoCallModals();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.id = "autoCallSaveErrorOverlay";
+  overlay.innerHTML = `
+    <div class="glass modal-box">
+      <div class="section-title"><span>⚠ Unable to Save</span></div>
+      <div class="mini" style="margin-bottom:14px">Could not save the result for <b>${esc(rec.Name || rec.ID)}</b> yet — nothing has been lost. Retry, or stop and it'll still be waiting for you.</div>
+      <button class="btn primary full" id="autoCallRetrySave">↻ Retry Save</button>
+      <button class="btn ghost full" id="autoCallStopFromError" style="margin-top:10px">⏹ Stop Auto Call</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("autoCallRetrySave").onclick = () => { overlay.remove(); autoCallRecordDisposition(rec, status, remarks, runId); };
+  document.getElementById("autoCallStopFromError").onclick = () => { overlay.remove(); stopAutoCall(); };
+}
+
+function autoCallFinish(runId){
+  if(runId !== autoCall.runId) return;
+  autoCall.active = false;
+  autoCall.phase = "completed";
+  saveAutoCallState("Auto Call completed");
+  renderUser();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="glass modal-box" style="text-align:center">
+      <div style="font-size:40px;margin-bottom:8px">🎉</div>
+      <div class="section-title" style="justify-content:center"><span>Auto Call Completed</span></div>
+      <div class="mini" style="margin:10px 0 16px">All eligible assigned contacts have been processed (${autoCall.processed} call${autoCall.processed===1?"":"s"} this run).</div>
+      <button class="btn primary full" id="autoCallDoneClose">Done</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); autoCall.phase = "idle"; renderUser(); };
+  document.getElementById("autoCallDoneClose").onclick = close;
+  overlay.onclick = e => { if(e.target === overlay) close(); };
+}
+
+function renderAutoCallBanner(){
+  if(!autoCall.active){
+    const hasSavedQueue = autoCall.queue.length > 0 && autoCall.pos < autoCall.queue.length;
+    const resumeRec = hasSavedQueue ? autoCall.queue[autoCall.pos] : null;
+    return `
+    <div class="glass autocall-banner">
+      <div class="ac-left">
+        <div class="ac-title">🚀 AUTO CALL</div>
+        <div class="mini">Steps through your eligible leads one at a time — dial, log the result, repeat. You still tap once per call (phones require that); everything after is automatic.</div>
+        ${resumeRec ? `<div class="mini" style="margin-top:4px">Will resume from <b>${esc(resumeRec.Name || resumeRec.ID)}</b> (${autoCall.pos+1} / ${autoCall.queue.length}) unless you jump to a different contact first.</div>` : ""}
+      </div>
+      <div class="ac-actions">
+        <button id="startAutoCallBtn" class="btn primary">▶ START AUTO CALL</button>
+        ${hasSavedQueue ? `<button id="resetAutoCallBtn" class="btn ghost small">↺ Reset Position</button>` : ""}
+      </div>
+    </div>`;
+  }
+  const rec = autoCall.queue[autoCall.pos] || null;
+  const phaseLabel = {
+    dialing: "Calling…",
+    "awaiting-return": "Waiting for you to return from the dialer…",
+    disposition: "Waiting for you to log the result…",
+    saving: "Saving result…",
+    "save-error": "⚠ Could not save — retry needed",
+  }[autoCall.phase] || "Ready…";
+  return `
+  <div class="glass autocall-banner active">
+    <div class="ac-left">
+      <div class="ac-title">🚀 AUTO CALL ACTIVE</div>
+      ${rec ? `<div class="ac-cust">${esc(rec.Name || "Unnamed")} · ${esc(rec.Mobile || "—")}</div>` : ""}
+      <div class="mini">Queue: ${Math.min(autoCall.pos+1, autoCall.queue.length)} / ${autoCall.queue.length} &nbsp;·&nbsp; Status: ${esc(phaseLabel)}</div>
+    </div>
+    <div class="ac-actions">
+      ${autoCall.phase === "awaiting-return" ? `<button id="autoCallManualReturnBtn" class="btn dark small">I'm back — log this call</button>` : ""}
+      <button id="stopAutoCallBtn" class="btn red small">⏹ STOP AUTO CALL</button>
+    </div>
+  </div>`;
+}
 
 /* =====================================================================
    PAYMENT / SELF-SERVE CONTACT PACKAGE CONFIG
@@ -467,7 +907,19 @@ let session = JSON.parse(localStorage.getItem(LS_SESSION) || "null");
 let contacts = [];
 let usageCount = null;
 let usageBadgeDismissed = sessionStorage.getItem("ccm_usage_dismissed") === "1";
-let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, showBulkWaPanel:false, showQueueTable:false, bulkWaTemplate:"Hello {name}, this is regarding your policy enquiry. Let us know if you have any questions!", dirty:false, userBaseValue:"", saveState:null };
+let ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, showBulkWaPanel:false, showQueueTable:false, bulkWaTemplate:"Hello {name}, this is regarding your policy enquiry. Let us know if you have any questions!", dirty:false, userBaseValue:"", saveState:null, lastManualContactId:null };
+
+/* Resets per-session UI + Auto Call in-memory state. Called on every
+   successful login and on logout so that switching Field Users on the
+   same device/tab can never leak one user's current record, Auto Call
+   queue, or position into another user's session (Multi-User Safety).
+   localStorage itself is already isolated per-username by key prefix;
+   this closes the matching gap for the in-memory objects that live for
+   the lifetime of the page. */
+function resetSessionUiState(){
+  ui = { currentIndex:0, statusFilter:"All", search:"", drawerOpen:false, showLinksPanel:false, showBulkWaPanel:false, showQueueTable:false, bulkWaTemplate: ui.bulkWaTemplate, dirty:false, userBaseValue:"", saveState:null, lastManualContactId:null, restoredPosition:false };
+  autoCall = { active:false, runId:(autoCall ? autoCall.runId : 0) + 1, queue:[], pos:0, processed:0, phase:"idle", dialedAt:0, restored:false };
+}
 let savingInFlight = false; // blocks duplicate Save submissions while a save is in flight
 
 /* ---------------------- Bulk WhatsApp: sent-tracking (per user, per device) ----------------------
@@ -775,6 +1227,7 @@ function renderLogin(){
     clearLoginAttempts(username);
     session = { username:r.username, role:r.role, fullName:r.fullName || r.username, pin };
     saveSession();
+    resetSessionUiState(); // fresh in-memory state per login — never carry over another user's current record/Auto Call queue
     showToast(`Welcome, ${session.fullName}`);
     boot();
   };
@@ -817,6 +1270,7 @@ async function boot(){
   const cached = getCachedContacts();
   if(cached && Array.isArray(cached.contacts)){
     contacts = cached.contacts;
+    if(!autoCall.restored){ autoCall.restored = true; loadAutoCallState(); }
     render();
   } else {
     app.innerHTML = `<div class="wrap"><div class="notice" id="bootNotice">Loading your data from Google Sheet…</div></div>`;
@@ -845,6 +1299,7 @@ async function boot(){
     contacts = contactsRes.contacts || [];
     setCachedContacts(contacts);
     if(usageRes.ok) usageCount = usageRes.usageCount;
+    if(!autoCall.restored){ autoCall.restored = true; loadAutoCallState(); }
     render();
     flushRetryQueue();
   }catch(err){
@@ -888,10 +1343,13 @@ function filteredContacts(){
   return list;
 }
 /* ---------------------- Record navigation (buttons + keyboard share this) ---------------------- */
-function goNextRecord(){ const list = filteredContacts(); ui.currentIndex = (ui.currentIndex+1) % Math.max(list.length,1); renderUser(); }
-function goPrevRecord(){ const list = filteredContacts(); ui.currentIndex = (ui.currentIndex-1+list.length) % Math.max(list.length,1); renderUser(); }
-function goFirstRecord(){ ui.currentIndex = 0; renderUser(); }
-function goLastRecord(){ const list = filteredContacts(); ui.currentIndex = Math.max(list.length-1,0); renderUser(); }
+/* Each of these is a deliberate manual navigation, so it marks a manual
+   jump — read once by startAutoCall() to decide whether Auto Call should
+   begin at this contact instead of resuming the old saved position. */
+function goNextRecord(){ if(autoCall.active && autoCall.phase !== "idle") return; const list = filteredContacts(); ui.currentIndex = (ui.currentIndex+1) % Math.max(list.length,1); markManualJump(list[ui.currentIndex]); renderUser(); }
+function goPrevRecord(){ if(autoCall.active && autoCall.phase !== "idle") return; const list = filteredContacts(); ui.currentIndex = (ui.currentIndex-1+list.length) % Math.max(list.length,1); markManualJump(list[ui.currentIndex]); renderUser(); }
+function goFirstRecord(){ if(autoCall.active && autoCall.phase !== "idle") return; ui.currentIndex = 0; markManualJump(filteredContacts()[0]); renderUser(); }
+function goLastRecord(){ if(autoCall.active && autoCall.phase !== "idle") return; const list = filteredContacts(); ui.currentIndex = Math.max(list.length-1,0); markManualJump(list[ui.currentIndex]); renderUser(); }
 
 /* ---------------------- USER BASE: jump directly to a customer by their ID ----------------------
    Looks up the ID against everything assigned to this user (ignoring the
@@ -908,6 +1366,7 @@ function loadByUserBase(raw){
   const idx = filteredContacts().findIndex(c => String(c.ID) === String(match.ID));
   ui.currentIndex = idx >= 0 ? idx : 0;
   ui.drawerOpen = false;
+  markManualJump(match);
   renderUser();
   showToast(`Loaded customer ${match.ID} — ${match.Name || "Unnamed"}`);
 }
@@ -1022,6 +1481,7 @@ function renderUser(){
   const drafts = getDrafts();
   const draftText = rec && drafts[rec.ID] !== undefined ? drafts[rec.ID] : (rec ? (rec.Remarks||"") : "");
   const hasDraft = rec && drafts[rec.ID] !== undefined && drafts[rec.ID] !== (rec.Remarks||"");
+  const acBusy = autoCall.active && autoCall.phase !== "idle";
 
   app.innerHTML = `
     ${cornerLogoutHtml()}
@@ -1044,6 +1504,8 @@ function renderUser(){
           <button id="openDrawerBtn" class="btn dark small queue-toggle">☰ Queue (${total})</button>
         </div>
       </div>
+
+      ${renderAutoCallBanner()}
 
       ${(total>0 && done>=total) ? `
       <div class="glass repurchase-banner">
@@ -1127,7 +1589,7 @@ function renderUser(){
             ${SHARE_LINKS.filter(d=>getShareLink(d.key)).length ? `<div class="toolbar" style="margin-top:10px">
               ${SHARE_LINKS.filter(d=>getShareLink(d.key)).map(d=>`<button class="btn dark small" data-share="${d.key}">${d.icon} ${esc(d.shareLabel)}</button>`).join("")}
             </div>` : ""}
-            <div class="tabs">
+            <div class="tabs ${acBusy?"ac-locked":""}">
               ${STATUS_OPTIONS.map(s=>`<button class="tab ${rec.Status===s?"active":""}" data-status="${s}">${s}</button>`).join("")}
             </div>
             <div class="data">
@@ -1139,13 +1601,13 @@ function renderUser(){
                 <textarea id="remarksBox" placeholder="Add a note about this call…">${esc(draftText)}</textarea>
               </div>
             </div>
-            <div class="actions">
+            <div class="actions ${acBusy?"ac-locked":""}">
               <a class="btn green" href="tel:${telNumber(rec.Mobile)}">📞 Call</a>
               <button class="btn blue" id="waBtn">💬 WhatsApp</button>
               <button class="btn purple" id="smsBtn">✉️ Message</button>
               <button class="btn primary" id="saveBtn" ${savingInFlight ? "disabled" : ""}>💾 Save</button>
             </div>
-            <div class="actions-row2">
+            <div class="actions-row2 ${acBusy?"ac-locked":""}">
               <button class="btn dark" id="prevBtn">◀ Prev</button>
               <button class="btn dark" id="nextBtn">Next ▶</button>
               <button class="btn ghost" id="skipBtn">Skip</button>
@@ -1208,6 +1670,7 @@ function renderUser(){
   document.querySelectorAll("[data-open-qi]").forEach(b => b.onclick = () => {
     ui.currentIndex = Number(b.dataset.openQi);
     ui.showQueueTable = false;
+    markManualJump(filteredContacts()[ui.currentIndex]);
     renderUser();
   });
 
@@ -1222,6 +1685,15 @@ function renderUser(){
   if(userBaseFirstBtn) userBaseFirstBtn.onclick = goFirstRecord;
   const userBaseLastBtn = document.getElementById("userBaseLastBtn");
   if(userBaseLastBtn) userBaseLastBtn.onclick = goLastRecord;
+
+  const startAutoCallBtn = document.getElementById("startAutoCallBtn");
+  if(startAutoCallBtn) startAutoCallBtn.onclick = startAutoCall;
+  const resetAutoCallBtn = document.getElementById("resetAutoCallBtn");
+  if(resetAutoCallBtn) resetAutoCallBtn.onclick = resetAutoCallPosition;
+  const stopAutoCallBtn = document.getElementById("stopAutoCallBtn");
+  if(stopAutoCallBtn) stopAutoCallBtn.onclick = stopAutoCall;
+  const autoCallManualReturnBtn = document.getElementById("autoCallManualReturnBtn");
+  if(autoCallManualReturnBtn) autoCallManualReturnBtn.onclick = () => handleAutoCallReturn(true);
   const bulkWaTemplate = document.getElementById("bulkWaTemplate");
   if(bulkWaTemplate) bulkWaTemplate.oninput = () => { ui.bulkWaTemplate = bulkWaTemplate.value; };
   const bulkWaSendBtn = document.getElementById("bulkWaSendBtn");
@@ -1264,7 +1736,7 @@ function renderUser(){
     sb.oninput = e => { ui.search=e.target.value; ui.currentIndex=0; renderUser(); focusEnd("searchBox"); };
   }
   const sf = document.getElementById("statusFilter"); if(sf) sf.onchange = e => { ui.statusFilter=e.target.value; ui.currentIndex=0; renderUser(); };
-  document.querySelectorAll(".record[data-i]").forEach(el => el.onclick = () => { ui.currentIndex = Number(el.dataset.i); ui.drawerOpen=false; renderUser(); });
+  document.querySelectorAll(".record[data-i]").forEach(el => el.onclick = () => { ui.currentIndex = Number(el.dataset.i); ui.drawerOpen=false; markManualJump(filteredContacts()[ui.currentIndex]); renderUser(); });
 
   if(rec){
     const currentRemarks = () => { const r = document.getElementById("remarksBox"); return r ? r.value : draftText; };
@@ -1274,12 +1746,12 @@ function renderUser(){
       remarksBox.oninput = () => { setDraft(rec.ID, remarksBox.value); };
     }
 
-    document.querySelectorAll(".tab").forEach(t => t.onclick = () => saveRecord(rec, t.dataset.status, currentRemarks()));
+    document.querySelectorAll(".tab").forEach(t => t.onclick = () => { if(acBusy) return; saveRecord(rec, t.dataset.status, currentRemarks()); });
 
     const num = cleanNumber(rec.Mobile);
     const openWa = () => { if(!num) return showToast("No mobile number"); window.open(`https://wa.me/${num}?text=${encodeURIComponent("Hello! Thank you for your interest.")}`,"_blank","noopener"); };
     const openSms = () => { if(!num) return showToast("No mobile number"); window.location.href = `sms:${rec.Mobile}?body=${encodeURIComponent("Hello! Thank you for your interest.")}`; };
-    const doSave = () => saveRecord(rec, rec.Status || "Pending", currentRemarks());
+    const doSave = () => { if(acBusy) return; saveRecord(rec, rec.Status || "Pending", currentRemarks()); };
 
     const waBtn = document.getElementById("waBtn"); if(waBtn) waBtn.onclick = openWa;
     const smsBtn = document.getElementById("smsBtn"); if(smsBtn) smsBtn.onclick = openSms;
@@ -1793,6 +2265,17 @@ setInterval(() => {
     renderLogin();
   }
 }, 30000);
+
+/* ---------------------- Persist Auto Call position on refresh/close ----------------------
+   The Page Visibility / beforeunload pair is the only reliable signal a
+   static page gets before it's torn down by a refresh, tab close, or
+   navigation away. Auto Call state is already saved on every meaningful
+   event above, so this is a final safety-net flush for anything that
+   happened in the last few seconds before unload (e.g. mid "dialing"). */
+window.addEventListener("beforeunload", () => { if(session && session.role === "user") saveAutoCallState("Page refresh/reload"); });
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "hidden" && session && session.role === "user") saveAutoCallState("Page hidden");
+});
 
 boot();
 })();
